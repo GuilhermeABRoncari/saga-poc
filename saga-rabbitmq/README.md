@@ -106,7 +106,7 @@ bin/
 └── trigger.php                # dispara nova saga manualmente
 ```
 
-## Métricas a coletar (referência §3.2)
+## Métricas a coletar (referência [`docs/recomendacao-saga.md`](../docs/recomendacao-saga.md) §3.2)
 
 A preencher após smoke test:
 

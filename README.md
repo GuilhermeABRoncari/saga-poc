@@ -2,7 +2,14 @@
 
 PoC comparativo de ferramentas para o **padrão organizacional de SAGA** da empresa.
 
-Contexto e critérios em [`backend/docs/recomendacao-saga.md`](https://github.com/mobilestock/backend/blob/descovery-queue/docs/recomendacao-saga.md) §3.
+## Documentação
+
+Toda a parte conceitual / analítica vive em [`docs/`](./docs):
+
+- [`docs/estudo.md`](./docs/estudo.md) — pesquisa inicial: comparação RabbitMQ vs Temporal (e por que Step Functions saiu).
+- [`docs/compreensao-saga.md`](./docs/compreensao-saga.md) — o que é SAGA na literatura, o que **não é**, e como o caso real `StoreController@activate` se encaixa.
+- [`docs/saga-rabbitmq-deep-dive.md`](./docs/saga-rabbitmq-deep-dive.md) — conceitos de AMQP/RabbitMQ + lições da PoC + gap pra produção.
+- [`docs/recomendacao-saga.md`](./docs/recomendacao-saga.md) — estado atual da decisão (em aberto) + plano de PoC comparativo + critérios.
 
 ## Estrutura
 
