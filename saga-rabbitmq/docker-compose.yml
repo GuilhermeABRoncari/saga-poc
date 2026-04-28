@@ -22,6 +22,7 @@ services:
       AMQP_PASS: guest
       SAGA_DB: /app/storage/saga.sqlite
       FORCE_FAIL: ${FORCE_FAIL:-}
+      AUTO_START: ${AUTO_START:-0}
     volumes:
       - ./storage:/app/storage
     command: ["php", "bin/orchestrator.php"]
@@ -35,6 +36,7 @@ services:
       AMQP_HOST: rabbitmq
       SERVICE_NAME: service-a
       FORCE_FAIL: ${FORCE_FAIL:-}
+      SLOW_RESERVE_STOCK: ${SLOW_RESERVE_STOCK:-0}
     command: ["php", "bin/service-a.php"]
 
   service-b:

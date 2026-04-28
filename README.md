@@ -10,6 +10,7 @@ Toda a parte conceitual / analítica vive em [`docs/`](./docs):
 - [`docs/compreensao-saga.md`](./docs/compreensao-saga.md) — o que é SAGA na literatura, o que **não é**, e como o caso real `StoreController@activate` se encaixa.
 - [`docs/saga-rabbitmq-deep-dive.md`](./docs/saga-rabbitmq-deep-dive.md) — conceitos de AMQP/RabbitMQ + lições da PoC + gap pra produção.
 - [`docs/recomendacao-saga.md`](./docs/recomendacao-saga.md) — estado atual da decisão (em aberto) + plano de PoC comparativo + critérios.
+- [`docs/findings-rabbitmq.md`](./docs/findings-rabbitmq.md) — medições e observações vivas da PoC RabbitMQ (preenche a tabela §3.2 da recomendação).
 
 ## Estrutura
 
