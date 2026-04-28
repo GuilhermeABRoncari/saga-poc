@@ -11,6 +11,7 @@ Toda a parte conceitual / analítica vive em [`docs/`](./docs):
 - [`docs/saga-rabbitmq-deep-dive.md`](./docs/saga-rabbitmq-deep-dive.md) — conceitos de AMQP/RabbitMQ + lições da PoC + gap pra produção.
 - [`docs/recomendacao-saga.md`](./docs/recomendacao-saga.md) — estado atual da decisão (em aberto) + plano de PoC comparativo + critérios.
 - [`docs/findings-rabbitmq.md`](./docs/findings-rabbitmq.md) — medições e observações vivas da PoC RabbitMQ (preenche a tabela §3.2 da recomendação).
+- [`docs/consideracoes.md`](./docs/consideracoes.md) — pros e contras detalhados por abordagem, com mitigações e o ponto-chave da "dialética Temporal vs Laravel".
 
 ## Estrutura
 
