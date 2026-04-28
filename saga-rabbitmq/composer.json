@@ -1,0 +1,21 @@
+{
+    "name": "mobilestock/saga-rabbitmq-poc",
+    "description": "PoC de SAGA com RabbitMQ + esboço de mobilestock/laravel-saga",
+    "type": "project",
+    "require": {
+        "php": "^8.3",
+        "php-amqplib/php-amqplib": "^3.7",
+        "ramsey/uuid": "^4.7",
+        "monolog/monolog": "^3.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "Mobilestock\\Saga\\": "src/Lib/",
+            "App\\Sagas\\": "src/Sagas/",
+            "App\\Handlers\\": "src/Handlers/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

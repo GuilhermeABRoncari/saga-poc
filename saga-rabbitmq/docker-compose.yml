@@ -1,0 +1,48 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  orchestrator:
+    build: .
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      AMQP_HOST: rabbitmq
+      AMQP_PORT: 5672
+      AMQP_USER: guest
+      AMQP_PASS: guest
+      SAGA_DB: /app/storage/saga.sqlite
+      FORCE_FAIL: ${FORCE_FAIL:-}
+    volumes:
+      - ./storage:/app/storage
+    command: ["php", "bin/orchestrator.php"]
+
+  service-a:
+    build: .
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      AMQP_HOST: rabbitmq
+      SERVICE_NAME: service-a
+      FORCE_FAIL: ${FORCE_FAIL:-}
+    command: ["php", "bin/service-a.php"]
+
+  service-b:
+    build: .
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      AMQP_HOST: rabbitmq
+      SERVICE_NAME: service-b
+    command: ["php", "bin/service-b.php"]
