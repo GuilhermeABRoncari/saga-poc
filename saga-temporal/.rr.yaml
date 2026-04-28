@@ -1,0 +1,16 @@
+version: "3"
+
+server:
+  command: 'php bin/${WORKER_SCRIPT}'
+  relay: pipes
+
+temporal:
+  address: '${TEMPORAL_ADDRESS}'
+  activities:
+    num_workers: 4
+
+logs:
+  level: info
+  mode: production
+  output: stdout
+  err_output: stderr
