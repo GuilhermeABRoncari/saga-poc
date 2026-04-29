@@ -3,10 +3,10 @@ FROM ghcr.io/roadrunner-server/roadrunner:2024.3 AS rr
 FROM php:8.3-cli-alpine
 
 RUN apk add --no-cache git unzip linux-headers zlib-dev $PHPIZE_DEPS \
- && pecl install grpc \
- && docker-php-ext-enable grpc \
- && docker-php-ext-install sockets pcntl \
- && apk del $PHPIZE_DEPS
+    && pecl install grpc \
+    && docker-php-ext-enable grpc \
+    && docker-php-ext-install sockets pcntl \
+    && apk del $PHPIZE_DEPS
 
 # Runtime libs que o apk del removeu junto com o $PHPIZE_DEPS (grpc.so depende delas).
 RUN apk add --no-cache libstdc++ zlib
