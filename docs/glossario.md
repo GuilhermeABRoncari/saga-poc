@@ -15,7 +15,7 @@
 | **Compensation**                   | Ação que reverte um step bem-sucedido durante um rollback. Ex.: `ReleaseStock` reverte `ReserveStock`.                                                                                                             | Todos os documentos.                            |
 | **Workflow / Saga definition**     | Especificação ordenada dos steps + suas compensações + regras de retry/timeout. Em Temporal é PHP code; em RabbitMQ é classe `Saga` com `definition()`; em Step Functions é JSON ASL.                              | Todos os documentos.                            |
 | **Orchestrator / Workflow worker** | Processo central que coordena o fluxo da saga: lê eventos de conclusão de step, decide próximo step, dispara compensação em falha.                                                                                 | `findings-rabbitmq.md`, `findings-temporal.md`. |
-| **Service worker**                 | Processo que executa o handler concreto de um step (ex.: o código que de fato chama `marketplace-api/reserve-stock`).                                                                                              | Ambos PoCs.                                     |
+| **Service worker**                 | Processo que executa o handler concreto de um step (ex.: o código que de fato chama `marketplace-api/reserve-stock`).                                                                                              | Todos os 3 PoCs.                                |
 
 ---
 
@@ -118,7 +118,7 @@
 
 | Termo                                           | Significado                                                                                                              |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **PDO**                                         | **PHP Data Objects** — abstração de DB do PHP. Usado nas duas PoCs para SQLite/Postgres/MySQL.                           |
+| **PDO**                                         | **PHP Data Objects** — abstração de DB do PHP. Usado na PoC RabbitMQ para SQLite/Postgres/MySQL.                          |
 | **WAL**                                         | **Write-Ahead Logging** — modo de SQLite que permite leituras concorrentes com 1 writer. Habilitado em T6.2.             |
 | **PRAGMA busy_timeout**                         | Diretiva SQLite que define quanto tempo (ms) esperar antes de falhar em "database is locked".                            |
 | **opcache**                                     | Cache de bytecode do PHP. Habilitado em FPM, desabilitado em CLI por default.                                            |

@@ -134,7 +134,7 @@ PoC reaberta após decisão preliminar para validar definitivamente. Resultados 
 
 | Critério | Resultado |
 |---|---|
-| LOC totais | ~330 (state-machine.json 108 + workers 110 + bin 220) — entre RabbitMQ (632) e Temporal (237) |
+| LOC totais (sem bench) | ~440 (state-machine.json 119 + ActivityWorker + 2 workers + trigger + bootstrap) — entre RabbitMQ (632) e Temporal (237) |
 | Throughput burst (T1.3) | **10.9/s** — pior dos 3 (RabbitMQ 48/s, Temporal 28/s) |
 | Throughput sustentado (T3.3) | 7.5/s — pior dos 3 |
 | Latência p99 (T6.2) | **2092ms** — ~95x pior que RabbitMQ, ~6x pior que Temporal |

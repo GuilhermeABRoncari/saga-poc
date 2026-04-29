@@ -10,8 +10,8 @@ Avaliar ferramentas para orquestração genérica de workflows entre microsservi
 
 - **Infra futura**: Migração para Kubernetes planejada (hoje Docker Swarm; ver §1.1 de `recomendacao-saga.md` para premissas atualizadas — migração gradual, marketplace-api primeiro).
 - **Abordagem**: PoC mínimo por ferramenta com workflow de 3 passos com compensação LIFO.
-- **AWS Step Functions descartado**: Foco em RabbitMQ + lib interna e Temporal.
-- **Organização**: Diretórios isolados (`saga-rabbitmq/`, `saga-temporal/`) em repositório dedicado de estudo.
+- **AWS Step Functions descartado inicialmente, reaberto em 2026-04-29**: foco original foi RabbitMQ + lib interna e Temporal. Após decisão preliminar pró-Temporal, a 3ª PoC (`saga-step-functions/`) foi executada em LocalStack para fechar comparação 3-way. Resultado em [`findings-step-functions.md`](./findings-step-functions.md): Step Functions adiciona "zero-ops" como atrativo mas perde nos critérios qualitativos críticos (correção sob mudança de código, latência, lock-in).
+- **Organização**: Diretórios isolados (`saga-rabbitmq/`, `saga-temporal/`, `saga-step-functions/`) em repositório dedicado de estudo.
 
 ## Arquitetura atual relevante
 

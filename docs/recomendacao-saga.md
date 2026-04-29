@@ -110,7 +110,7 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 - Lock-in AWS profundo; migração futura ou estratégia multi-cloud exige refazer N workflows.
 - Integrações com APIs internas exigem Lambda intermediária ou HTTP Task — mais peças móveis.
 
-**Status:** marcada como descartada no `estudo.md` original (foco em RabbitMQ + Temporal). Se o PoC comparativo das duas finalistas frustrar, reabrir avaliação aqui.
+**Status (atualizado 2026-04-29):** descartada inicialmente, **reaberta como 3ª PoC** (`saga-step-functions/`) após decisão preliminar pró-Temporal. Executada em LocalStack 3.8 com os mesmos 20 testes Tier 1-6. Resultados completos em [`findings-step-functions.md`](./findings-step-functions.md). Veredito: confirmou as hipóteses contra (lock-in profundo, custo) e adicionou achados sobre latência alta (p99=2092ms vs 22ms RabbitMQ); o atrativo "zero-ops" não compensa o pacote de desvantagens estruturais. Não muda a recomendação principal.
 
 ### 2.4 SQS puro
 

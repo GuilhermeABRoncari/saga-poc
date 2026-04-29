@@ -1,6 +1,8 @@
-# Checklist de testes comparativos — RabbitMQ vs Temporal
+# Checklist de testes comparativos — RabbitMQ vs Temporal vs Step Functions
 
-> Lista viva de testes para gerar evidência objetiva. Cada teste tem **como executar**, **o que medir** e **espaço para anotar resultado**. Resultados consolidados depois alimentam [`findings-rabbitmq.md`](./findings-rabbitmq.md), [`findings-temporal.md`](./findings-temporal.md) e a tabela §3.2 de [`recomendacao-saga.md`](./recomendacao-saga.md).
+> Lista viva de testes para gerar evidência objetiva. Cada teste tem **como executar**, **o que medir** e **espaço para anotar resultado**. Resultados consolidados depois alimentam [`findings-rabbitmq.md`](./findings-rabbitmq.md), [`findings-temporal.md`](./findings-temporal.md), [`findings-step-functions.md`](./findings-step-functions.md) e a tabela §3.2 de [`recomendacao-saga.md`](./recomendacao-saga.md).
+>
+> **Histórico de execução:** os 20 testes foram primeiro rodados contra **RabbitMQ + Temporal** (Tier 1-6). Cada teste abaixo registra "Resultado RabbitMQ" e "Resultado Temporal". Após decisão preliminar, a **3ª PoC (Step Functions/LocalStack)** foi executada com os mesmos critérios; os resultados consolidados estão em [`findings-step-functions.md`](./findings-step-functions.md) (não duplicados aqui para manter o documento legível).
 >
 > Convenção de status:
 >
@@ -8,6 +10,7 @@
 > - `[~]` em andamento
 > - `[x]` executado, resultado anotado
 > - `[!]` executado, identificou bloqueio/bug que precisa ser tratado antes de continuar
+> - `[⏭]` pulado / não-executável neste contexto (ex.: requer dev externo, requer credenciais Cloud)
 
 ---
 

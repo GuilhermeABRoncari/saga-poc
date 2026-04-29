@@ -11,10 +11,10 @@
 | Métrica | Valor | Comparação |
 |---|---|---|
 | Sessão de implementação | 1 (~1.5h, contando ajustes) | RabbitMQ ~2h; Temporal ~3h |
-| LOC totais (PHP) | **~330** (state-machine.json + ActivityWorker + bin/) | RabbitMQ 632; Temporal 237 |
-| LOC do "workflow" (state-machine.json) | **108** (ASL JSON) | RabbitMQ 381 lib em 6 arquivos; Temporal 77 workflow |
-| LOC dos 2 service workers | 110 (handlers + setup) | RabbitMQ 73; Temporal 96 |
-| LOC do bin (trigger + bench + alerter + bootstrap) | 220 | RabbitMQ 140; Temporal 64 |
+| LOC totais (PHP + JSON, sem bench) | **~440** (state-machine.json 119 + ActivityWorker 87 + 2 workers 108 + trigger 60 + bootstrap 66) | RabbitMQ 632; Temporal 237 |
+| LOC do "workflow" (state-machine.json) | **119** (ASL JSON) | RabbitMQ 381 lib em 6 arquivos; Temporal 77 workflow |
+| LOC dos 2 service workers + ActivityWorker base | 195 (87 + 61 + 47) | RabbitMQ 73 (handlers); Temporal 96 (activities) |
+| LOC do bin (trigger, bench, alerter, bootstrap, update-asl, sustained, batch) | ~340 | RabbitMQ 140; Temporal 64 |
 | Composer deps | 2 (`aws/aws-sdk-php`, `ramsey/uuid`) | RabbitMQ 3; Temporal 3 |
 | Containers Docker | 5 (localstack + bootstrap + 2 workers + alerter) | RabbitMQ 5; Temporal 7 |
 | Tempo do primeiro `docker compose up --build` | ~2 min (LocalStack pull domina) | RabbitMQ ~2 min; Temporal ~25 min |
@@ -192,8 +192,8 @@ Comparação:
 
 | Critério | RabbitMQ | Temporal | Step Functions | Quem ganha |
 |---|---|---|---|---|
-| LOC totais (PHP) | 632 | 237 | ~330 | **Temporal** |
-| LOC do "workflow" | 381 | 77 | 108 (ASL) | **Temporal** |
+| LOC totais (PHP, sem bench) | 632 | 237 | ~440 | **Temporal** |
+| LOC do "workflow" | 381 | 77 | 119 (ASL) | **Temporal** |
 | Setup local 1ª vez | ~2 min | ~25 min | ~2 min | **RabbitMQ / Step Functions** (empate) |
 | Composer deps | 3 | 3 | 2 | **Step Functions** (marginal) |
 | Containers | 5 | 7 | 5 | empate |
