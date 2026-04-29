@@ -1,6 +1,8 @@
 # Fechamento do PoC SAGA — síntese das 6 baterias de teste
 
-> Documento de consolidação da decisão. Resume **20 testes Tier 1-6** executados contra duas PoCs reais (`saga-rabbitmq/` e `saga-temporal/`), implementando o mesmo workflow de referência (`ActivateStoreSaga` reduzido). Toda a evidência empírica + análise está em [`checklist-testes.md`](./checklist-testes.md), [`findings-rabbitmq.md`](./findings-rabbitmq.md), [`findings-temporal.md`](./findings-temporal.md) e [`consideracoes.md`](./consideracoes.md).
+> Documento de consolidação da decisão. Resume **20 testes Tier 1-6** executados contra três PoCs reais (`saga-rabbitmq/`, `saga-temporal/`, `saga-step-functions/`), implementando o mesmo workflow de referência (`ActivateStoreSaga` reduzido). Toda a evidência empírica + análise está em [`checklist-testes.md`](./checklist-testes.md), [`findings-rabbitmq.md`](./findings-rabbitmq.md), [`findings-temporal.md`](./findings-temporal.md), [`findings-step-functions.md`](./findings-step-functions.md) e [`consideracoes.md`](./consideracoes.md).
+>
+> **Atualizado em 2026-04-29** com a 3ª PoC (AWS Step Functions via LocalStack). A 3ª PoC foi originalmente "em standby" e reaberta para fechar definitivamente o estudo. Resultado: **a recomendação de adotar Temporal continua válida** — Step Functions adiciona "zero ops" como atrativo mas perde nos critérios qualitativos críticos (correção sob mudança de código, latência, lock-in).
 >
 > Este documento é o **input direto para fechar [`recomendacao-saga.md`](./recomendacao-saga.md)**.
 
@@ -124,6 +126,31 @@ A vitória **em quantidade de critérios** ficou quase empatada (14 vs 13). Mas 
 
 ---
 
+## 4.5 3ª PoC — AWS Step Functions (executada via LocalStack)
+
+PoC reaberta após decisão preliminar para validar definitivamente. Resultados em [`findings-step-functions.md`](./findings-step-functions.md).
+
+**Resumo de Tier 1-6 contra Step Functions/LocalStack:**
+
+| Critério | Resultado |
+|---|---|
+| LOC totais | ~330 (state-machine.json 108 + workers 110 + bin 220) — entre RabbitMQ (632) e Temporal (237) |
+| Throughput burst (T1.3) | **10.9/s** — pior dos 3 (RabbitMQ 48/s, Temporal 28/s) |
+| Throughput sustentado (T3.3) | 7.5/s — pior dos 3 |
+| Latência p99 (T6.2) | **2092ms** — ~95x pior que RabbitMQ, ~6x pior que Temporal |
+| Versionamento (T1.1) | **Silent migration em LocalStack** — in-flight saga adotou nova ASL mid-execution. AWS real seria pinning (que tem outro problema: sagas em voo nunca recebem fixes). |
+| Falha de infra (T1.4) | LocalStack perdeu TODO o state. Em AWS real seria multi-AZ durável, mas no nosso teste não validamos. |
+| Compensação paralela (T2.3) | ❌ Catch chain inerentemente sequencial; paralelo exige `Type:Parallel` (rewrite ASL). |
+| Operação | ✅✅ **zero-ops em AWS real** — único critério onde Step Functions vence Temporal. |
+| Custo financeiro 12 meses | ~$51k/ano (volume agregado dos 4 sistemas × $0.025/1000 transições) — próximo do Temporal Cloud. |
+| Lock-in | ❌ profundo (AWS-only) |
+
+**Conclusão da 3ª PoC:** Step Functions é viável tecnicamente, atrativo operacionalmente, mas **não vence Temporal em nenhum dos critérios qualitativos críticos** (correção, latência, lock-in). O argumento "zero-ops" é forte, mas não compensa o lock-in profundo + custo de transição (cada step = transição cobrada) + latência maior.
+
+**Limitação importante a registrar:** os testes rodaram em LocalStack (free), não AWS real. Quatro tests (T1.1 versionamento, T1.4 infra failure, T1.5 getVersion equivalent, T6.1 custo) precisam de re-validação em AWS real para fechar a comparação 100%. Mas mesmo assumindo o melhor cenário do AWS real, os critérios em que Step Functions perde (latência, lock-in, custo) são estruturais e não mudariam.
+
+---
+
 ## 5. Resposta à pergunta-chave do tech lead
 
 A pergunta de [`consideracoes.md`](./consideracoes.md) §9 era: *"Com que frequência você espera mudar a forma de uma saga vs mudar regras de negócio dentro dos passos?"*
@@ -178,8 +205,10 @@ Se aparecer caso pontual de SAGA que **não justifica adotar plataforma nova** (
 
 ## 7. Arquivos relacionados
 
+- [`glossario.md`](./glossario.md) — sumário de siglas e termos do estudo.
 - [`checklist-testes.md`](./checklist-testes.md) — 20 testes detalhados com cada resultado.
 - [`findings-rabbitmq.md`](./findings-rabbitmq.md) — medições da PoC RabbitMQ.
 - [`findings-temporal.md`](./findings-temporal.md) — medições simétricas da PoC Temporal.
+- [`findings-step-functions.md`](./findings-step-functions.md) — medições simétricas da PoC Step Functions / LocalStack.
 - [`consideracoes.md`](./consideracoes.md) — pros e contras detalhados (atualizado pós Tier 1-6).
-- [`recomendacao-saga.md`](./recomendacao-saga.md) — documento oficial de decisão (a ser fechado com base neste).
+- [`recomendacao-saga.md`](./recomendacao-saga.md) — documento oficial de decisão.

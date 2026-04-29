@@ -4,7 +4,9 @@
 >
 > **Status atual (2026-04-29): RECOMENDAÇÃO FECHADA — Adotar Temporal como padrão organizacional.**
 >
-> Esta recomendação está fundamentada em **20 testes Tier 1-6** executados contra duas PoCs reais. Detalhes em [`checklist-testes.md`](./checklist-testes.md), [`findings-rabbitmq.md`](./findings-rabbitmq.md), [`findings-temporal.md`](./findings-temporal.md), [`consideracoes.md`](./consideracoes.md) e [`fechamento.md`](./fechamento.md).
+> Esta recomendação está fundamentada em **20 testes Tier 1-6** executados contra **três PoCs reais** (RabbitMQ, Temporal, Step Functions/LocalStack). Detalhes em [`checklist-testes.md`](./checklist-testes.md), [`findings-rabbitmq.md`](./findings-rabbitmq.md), [`findings-temporal.md`](./findings-temporal.md), [`findings-step-functions.md`](./findings-step-functions.md), [`consideracoes.md`](./consideracoes.md) e [`fechamento.md`](./fechamento.md).
+>
+> **3ª PoC (Step Functions) reaberta e fechada em 2026-04-29:** confirmou que Step Functions adiciona "zero-ops" como atrativo, mas perde nos critérios qualitativos críticos (latência ~16x maior que Temporal, lock-in AWS profundo, custo $51k/ano vs ~$5k/ano self-host EKS). Não muda a recomendação — só fortalece.
 >
 > **Sujeita a confirmação do tech lead** com base na pergunta-chave de §6 (frequência esperada de mudanças na forma das sagas).
 

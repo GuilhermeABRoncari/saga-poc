@@ -10,7 +10,9 @@
             "Next": "ChargeCredit",
             "Catch": [
                 {
-                    "ErrorEquals": ["States.ALL"],
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
                     "ResultPath": "$.error",
                     "Next": "FailReserveStock"
                 }
@@ -24,7 +26,9 @@
             "Next": "ConfirmShipping",
             "Catch": [
                 {
-                    "ErrorEquals": ["States.ALL"],
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
                     "ResultPath": "$.error",
                     "Next": "ReleaseStockOnly"
                 }
@@ -38,7 +42,9 @@
             "Next": "Success",
             "Catch": [
                 {
-                    "ErrorEquals": ["States.ALL"],
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
                     "ResultPath": "$.error",
                     "Next": "RefundCredit"
                 }
@@ -52,7 +58,9 @@
             "Next": "ReleaseStock",
             "Catch": [
                 {
-                    "ErrorEquals": ["States.ALL"],
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
                     "ResultPath": "$.compensationError",
                     "Next": "FailCompensation"
                 }
@@ -66,7 +74,9 @@
             "Next": "Compensated",
             "Catch": [
                 {
-                    "ErrorEquals": ["States.ALL"],
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
                     "ResultPath": "$.compensationError",
                     "Next": "FailCompensation"
                 }
@@ -80,7 +90,9 @@
             "Next": "Compensated",
             "Catch": [
                 {
-                    "ErrorEquals": ["States.ALL"],
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
                     "ResultPath": "$.compensationError",
                     "Next": "FailCompensation"
                 }

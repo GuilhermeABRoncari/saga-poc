@@ -13,6 +13,7 @@ Toda a parte conceitual / analítica vive em [`docs/`](./docs):
 - [`docs/recomendacao-saga.md`](./docs/recomendacao-saga.md) — estado atual da decisão (em aberto) + plano de PoC comparativo + critérios.
 - [`docs/findings-rabbitmq.md`](./docs/findings-rabbitmq.md) — medições e observações vivas da PoC RabbitMQ (preenche a tabela §3.2 da recomendação).
 - [`docs/findings-temporal.md`](./docs/findings-temporal.md) — medições simétricas da PoC Temporal + tabela final de comparação direta.
+- [`docs/findings-step-functions.md`](./docs/findings-step-functions.md) — medições simétricas da 3ª PoC (Step Functions via LocalStack).
 - [`docs/consideracoes.md`](./docs/consideracoes.md) — pros e contras detalhados por abordagem, com mitigações e o ponto-chave da "dialética Temporal vs Laravel".
 - [`docs/checklist-testes.md`](./docs/checklist-testes.md) — checklist de 20 testes comparativos Tier 1-6, com resultados anotados.
 - [`docs/fechamento.md`](./docs/fechamento.md) — síntese das 6 baterias de teste e recomendação consolidada.
@@ -21,6 +22,7 @@ Toda a parte conceitual / analítica vive em [`docs/`](./docs):
 
 - [`saga-rabbitmq/`](./saga-rabbitmq) — PoC com RabbitMQ + esboço de `mobilestock/laravel-saga`.
 - [`saga-temporal/`](./saga-temporal) — PoC com Temporal + esboço de `mobilestock/laravel-temporal-saga`. (vazio até segunda fase)
+- [`saga-step-functions/`](./saga-step-functions) — 3ª PoC com AWS Step Functions rodando em LocalStack + activity workers PHP poll-based.
 
 Cada PoC implementa o **mesmo workflow de referência** (3 passos com compensação LIFO; o passo 3 falha intencionalmente para exercitar reversão).
 
