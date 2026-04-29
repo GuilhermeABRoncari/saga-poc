@@ -1,0 +1,108 @@
+{
+    "Comment": "ActivateStoreSaga - 3 steps com compensação LIFO via Catch chain",
+    "StartAt": "ReserveStock",
+    "States": {
+        "ReserveStock": {
+            "Type": "Task",
+            "Resource": "__ARN_RESERVE_STOCK__",
+            "ResultPath": "$.reserve",
+            "TimeoutSeconds": 60,
+            "Next": "ChargeCredit",
+            "Catch": [
+                {
+                    "ErrorEquals": ["States.ALL"],
+                    "ResultPath": "$.error",
+                    "Next": "FailReserveStock"
+                }
+            ]
+        },
+        "ChargeCredit": {
+            "Type": "Task",
+            "Resource": "__ARN_CHARGE_CREDIT__",
+            "ResultPath": "$.charge",
+            "TimeoutSeconds": 60,
+            "Next": "ConfirmShipping",
+            "Catch": [
+                {
+                    "ErrorEquals": ["States.ALL"],
+                    "ResultPath": "$.error",
+                    "Next": "ReleaseStockOnly"
+                }
+            ]
+        },
+        "ConfirmShipping": {
+            "Type": "Task",
+            "Resource": "__ARN_CONFIRM_SHIPPING__",
+            "ResultPath": "$.shipping",
+            "TimeoutSeconds": 60,
+            "Next": "Success",
+            "Catch": [
+                {
+                    "ErrorEquals": ["States.ALL"],
+                    "ResultPath": "$.error",
+                    "Next": "RefundCredit"
+                }
+            ]
+        },
+        "RefundCredit": {
+            "Type": "Task",
+            "Resource": "__ARN_REFUND_CREDIT__",
+            "ResultPath": "$.refund",
+            "TimeoutSeconds": 60,
+            "Next": "ReleaseStock",
+            "Catch": [
+                {
+                    "ErrorEquals": ["States.ALL"],
+                    "ResultPath": "$.compensationError",
+                    "Next": "FailCompensation"
+                }
+            ]
+        },
+        "ReleaseStockOnly": {
+            "Type": "Task",
+            "Resource": "__ARN_RELEASE_STOCK__",
+            "ResultPath": "$.release",
+            "TimeoutSeconds": 60,
+            "Next": "Compensated",
+            "Catch": [
+                {
+                    "ErrorEquals": ["States.ALL"],
+                    "ResultPath": "$.compensationError",
+                    "Next": "FailCompensation"
+                }
+            ]
+        },
+        "ReleaseStock": {
+            "Type": "Task",
+            "Resource": "__ARN_RELEASE_STOCK__",
+            "ResultPath": "$.release",
+            "TimeoutSeconds": 60,
+            "Next": "Compensated",
+            "Catch": [
+                {
+                    "ErrorEquals": ["States.ALL"],
+                    "ResultPath": "$.compensationError",
+                    "Next": "FailCompensation"
+                }
+            ]
+        },
+        "Compensated": {
+            "Type": "Fail",
+            "Error": "Compensated",
+            "Cause": "Saga compensated successfully"
+        },
+        "FailReserveStock": {
+            "Type": "Fail",
+            "Error": "ReserveStockFailed",
+            "Cause": "ReserveStock failed; nothing to compensate"
+        },
+        "FailCompensation": {
+            "Type": "Fail",
+            "Error": "CompensationFailed",
+            "Cause": "Compensation step failed; manual intervention needed"
+        },
+        "Success": {
+            "Type": "Succeed"
+        }
+    }
+}

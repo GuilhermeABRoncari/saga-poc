@@ -1,0 +1,81 @@
+services:
+  localstack:
+    image: localstack/localstack:3.8
+    environment:
+      SERVICES: stepfunctions,iam,sts
+      DEBUG: 0
+      DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -sf http://localhost:4566/_localstack/health | grep -q '\"stepfunctions\": \"available\\|running\"'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  bootstrap:
+    build: .
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    volumes:
+      - ./storage:/app/storage
+    command: ["php", "bin/bootstrap.php"]
+
+  service-a-worker:
+    build: .
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      WORKER_NAME: service-a
+      FORCE_FAIL: ${FORCE_FAIL:-}
+      SLOW_RESERVE_STOCK: ${SLOW_RESERVE_STOCK:-0}
+      SLOW_COMPENSATION: ${SLOW_COMPENSATION:-0}
+    volumes:
+      - ./storage:/app/storage
+    command: ["php", "bin/service-a-worker.php"]
+
+  service-b-worker:
+    build: .
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      WORKER_NAME: service-b
+      FAIL_COMPENSATION: ${FAIL_COMPENSATION:-}
+      SLOW_COMPENSATION: ${SLOW_COMPENSATION:-0}
+    volumes:
+      - ./storage:/app/storage
+    command: ["php", "bin/service-b-worker.php"]
+
+  alerter:
+    build: .
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      ALERT_LOG: /app/storage/alerts.log
+      ALERT_POLL_INTERVAL: 2
+    volumes:
+      - ./storage:/app/storage
+    command: ["php", "bin/alerter.php"]

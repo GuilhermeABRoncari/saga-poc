@@ -1,0 +1,15 @@
+{
+    "name": "mobilestock/saga-step-functions",
+    "description": "PoC SAGA com AWS Step Functions (LocalStack + activity workers em PHP)",
+    "type": "project",
+    "require": {
+        "php": "^8.3",
+        "aws/aws-sdk-php": "^3.336",
+        "ramsey/uuid": "^4.7"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    }
+}

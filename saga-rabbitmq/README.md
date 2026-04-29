@@ -29,11 +29,11 @@ Estado da saga em SQLite (`storage/saga.sqlite`), tabela `sagas`.
 
 ## Workflow
 
-| Step | Serviço | Ação | Compensação |
-|---|---|---|---|
-| 0 | service-a | `reserve_stock` | `release_stock` |
-| 1 | service-b | `charge_credit` | `refund_credit` |
-| 2 | service-a | `confirm_shipping` | — |
+| Step | Serviço   | Ação               | Compensação     |
+| ---- | --------- | ------------------ | --------------- |
+| 0    | service-a | `reserve_stock`    | `release_stock` |
+| 1    | service-b | `charge_credit`    | `refund_credit` |
+| 2    | service-a | `confirm_shipping` | —               |
 
 Com `FORCE_FAIL=step3`, o passo 2 falha → orquestrador dispara `refund_credit` → `release_stock` (LIFO).
 
@@ -110,11 +110,11 @@ bin/
 
 A preencher após smoke test:
 
-| Critério | Medida |
-|---|---|
+| Critério                               | Medida    |
+| -------------------------------------- | --------- |
 | LOC happy path (lib + saga + handlers) | _a medir_ |
-| LOC compensação | _a medir_ |
-| Tempo até primeiro saga rodando | _a medir_ |
-| Observabilidade default | _a medir_ |
+| LOC compensação                        | _a medir_ |
+| Tempo até primeiro saga rodando        | _a medir_ |
+| Observabilidade default                | _a medir_ |
 | Esforço para observabilidade aceitável | _a medir_ |
-| DX em code review | _a medir_ |
+| DX em code review                      | _a medir_ |

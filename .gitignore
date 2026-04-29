@@ -5,6 +5,7 @@ composer.lock
 **/storage/*.sqlite-*
 **/storage/*.db
 **/storage/alerts.log
+**/storage/sfn-config.json
 *.log
 .idea/
 .vscode/

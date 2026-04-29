@@ -6,7 +6,8 @@ PoC comparativo de ferramentas para o **padrão organizacional de SAGA** da empr
 
 Toda a parte conceitual / analítica vive em [`docs/`](./docs):
 
-- [`docs/estudo.md`](./docs/estudo.md) — pesquisa inicial: comparação RabbitMQ vs Temporal (e por que Step Functions saiu).
+- [`docs/glossario.md`](./docs/glossario.md) — sumário de siglas e termos usados no estudo (PoC, SAGA, AMQP, ASL, etc.). Ler primeiro se algum termo não estiver claro.
+- [`docs/estudo.md`](./docs/estudo.md) — pesquisa inicial: comparação RabbitMQ vs Temporal (e por que Step Functions saiu — agora reaberto como 3ª PoC).
 - [`docs/compreensao-saga.md`](./docs/compreensao-saga.md) — o que é SAGA na literatura, o que **não é**, e como o caso real `StoreController@activate` se encaixa.
 - [`docs/saga-rabbitmq-deep-dive.md`](./docs/saga-rabbitmq-deep-dive.md) — conceitos de AMQP/RabbitMQ + lições da PoC + gap pra produção.
 - [`docs/recomendacao-saga.md`](./docs/recomendacao-saga.md) — estado atual da decisão (em aberto) + plano de PoC comparativo + critérios.
@@ -27,11 +28,11 @@ Cada PoC implementa o **mesmo workflow de referência** (3 passos com compensaç
 
 Versão reduzida do `ActivateStoreSaga` (caso do PR #2021 do `backend`):
 
-| Step | Serviço | Ação | Compensação |
-|---|---|---|---|
-| 1 | service-a (marketplace) | `ReserveStock` | `ReleaseStock` |
-| 2 | service-b (users) | `ChargeCredit` | `RefundCredit` |
-| 3 | service-a (marketplace) | `ConfirmShipping` | — (último passo) |
+| Step | Serviço                 | Ação              | Compensação      |
+| ---- | ----------------------- | ----------------- | ---------------- |
+| 1    | service-a (marketplace) | `ReserveStock`    | `ReleaseStock`   |
+| 2    | service-b (users)       | `ChargeCredit`    | `RefundCredit`   |
+| 3    | service-a (marketplace) | `ConfirmShipping` | — (último passo) |
 
 Com `FORCE_FAIL=step3` no orquestrador, o passo 3 falha → orquestrador executa `RefundCredit` → `ReleaseStock` (LIFO).
 

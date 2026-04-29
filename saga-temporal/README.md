@@ -25,11 +25,11 @@ Estado da saga, retries e compensação são responsabilidade do **engine Tempor
 
 ## Workflow
 
-| Step | Activity | Compensação |
-|---|---|---|
-| 1 | `ServiceA.reserveStock` | `ServiceA.releaseStock` |
-| 2 | `ServiceB.chargeCredit` | `ServiceB.refundCredit` |
-| 3 | `ServiceA.confirmShipping` | — (último passo) |
+| Step | Activity                   | Compensação             |
+| ---- | -------------------------- | ----------------------- |
+| 1    | `ServiceA.reserveStock`    | `ServiceA.releaseStock` |
+| 2    | `ServiceB.chargeCredit`    | `ServiceB.refundCredit` |
+| 3    | `ServiceA.confirmShipping` | — (último passo)        |
 
 Com `FORCE_FAIL=step3`, o `confirmShipping` lança exceção → bloco `catch` chama `yield $saga->compensate()` → engine roda `refundCredit` e `releaseStock` em LIFO automático.
 
@@ -42,6 +42,7 @@ docker compose up --build -d
 ```
 
 Componentes:
+
 - `temporal:7233` — gRPC do Temporal server
 - `temporal-ui` em http://localhost:8088 — UI de execução
 - 3 workers (workflow-worker, service-a-worker, service-b-worker)
@@ -95,11 +96,11 @@ bin/
 
 ## Comparação prevista (a preencher em `docs/findings-temporal.md`)
 
-| Critério | RabbitMQ (medido) | Temporal (a medir) |
-|---|---|---|
-| LOC happy path | 632 | _a medir_ |
-| LOC compensação | ~55 | _a medir_ |
-| Resiliência (kill mid-handler) | ✅ via requeue | _a medir, espera-se ✅ via Activity retry_ |
-| At-least-once → execução dupla | ⚠️ gap real | _espera-se ✅ exactly-once via event sourcing_ |
-| Observabilidade | logs + Mgmt UI básica | _UI Temporal: timeline rica_ |
-| DX em code review | fluxo espalhado em 3-4 arquivos | _saga em um arquivo, sequencial_ |
+| Critério                       | RabbitMQ (medido)               | Temporal (a medir)                             |
+| ------------------------------ | ------------------------------- | ---------------------------------------------- |
+| LOC happy path                 | 632                             | _a medir_                                      |
+| LOC compensação                | ~55                             | _a medir_                                      |
+| Resiliência (kill mid-handler) | ✅ via requeue                  | _a medir, espera-se ✅ via Activity retry_     |
+| At-least-once → execução dupla | ⚠️ gap real                     | _espera-se ✅ exactly-once via event sourcing_ |
+| Observabilidade                | logs + Mgmt UI básica           | _UI Temporal: timeline rica_                   |
+| DX em code review              | fluxo espalhado em 3-4 arquivos | _saga em um arquivo, sequencial_               |
