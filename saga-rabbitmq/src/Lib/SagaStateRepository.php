@@ -14,6 +14,8 @@ final class SagaStateRepository
     {
         $this->pdo = new PDO("sqlite:{$sqlitePath}");
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $this->pdo->exec('PRAGMA busy_timeout = 5000');
+        $this->pdo->exec('PRAGMA journal_mode = WAL');
         $this->migrate();
     }
 

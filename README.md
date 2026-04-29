@@ -13,7 +13,8 @@ Toda a parte conceitual / analítica vive em [`docs/`](./docs):
 - [`docs/findings-rabbitmq.md`](./docs/findings-rabbitmq.md) — medições e observações vivas da PoC RabbitMQ (preenche a tabela §3.2 da recomendação).
 - [`docs/findings-temporal.md`](./docs/findings-temporal.md) — medições simétricas da PoC Temporal + tabela final de comparação direta.
 - [`docs/consideracoes.md`](./docs/consideracoes.md) — pros e contras detalhados por abordagem, com mitigações e o ponto-chave da "dialética Temporal vs Laravel".
-- [`docs/checklist-testes.md`](./docs/checklist-testes.md) — checklist de testes comparativos pendentes, organizada por tiers de prioridade.
+- [`docs/checklist-testes.md`](./docs/checklist-testes.md) — checklist de 20 testes comparativos Tier 1-6, com resultados anotados.
+- [`docs/fechamento.md`](./docs/fechamento.md) — síntese das 6 baterias de teste e recomendação consolidada.
 
 ## Estrutura
 

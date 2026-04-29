@@ -15,4 +15,7 @@ interface ServiceBActivitiesInterface
 
     #[ActivityMethod]
     public function refundCredit(array $payload): array;
+
+    #[ActivityMethod]
+    public function auditLog(array $payload): array;
 }

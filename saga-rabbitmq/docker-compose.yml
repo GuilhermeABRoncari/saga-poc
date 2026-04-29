@@ -37,6 +37,7 @@ services:
       SERVICE_NAME: service-a
       FORCE_FAIL: ${FORCE_FAIL:-}
       SLOW_RESERVE_STOCK: ${SLOW_RESERVE_STOCK:-0}
+      SLOW_COMPENSATION: ${SLOW_COMPENSATION:-0}
     command: ["php", "bin/service-a.php"]
 
   service-b:
@@ -48,4 +49,18 @@ services:
       AMQP_HOST: rabbitmq
       SERVICE_NAME: service-b
       FAIL_COMPENSATION: ${FAIL_COMPENSATION:-}
+      SLOW_COMPENSATION: ${SLOW_COMPENSATION:-0}
     command: ["php", "bin/service-b.php"]
+
+  alerter:
+    build: .
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      SAGA_DB: /app/storage/saga.sqlite
+      ALERT_LOG: /app/storage/alerts.log
+      ALERT_POLL_INTERVAL: 2
+    volumes:
+      - ./storage:/app/storage
+    command: ["php", "bin/alerter.php"]

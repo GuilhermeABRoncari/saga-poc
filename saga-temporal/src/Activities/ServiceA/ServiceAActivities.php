@@ -8,6 +8,9 @@ final class ServiceAActivities implements ServiceAActivitiesInterface
 {
     public function reserveStock(array $payload): array
     {
+        if (($_ENV['FORCE_FAIL'] ?? '') === 'step1') {
+            throw new \RuntimeException('forced failure on reserve_stock (step1)');
+        }
         $delay = (int) ($_ENV['SLOW_RESERVE_STOCK'] ?? 0);
         if ($delay > 0) {
             error_log("  → ReserveStock: sleeping {$delay}s (resilience test)");
@@ -20,6 +23,11 @@ final class ServiceAActivities implements ServiceAActivitiesInterface
 
     public function releaseStock(array $payload): array
     {
+        $delay = (int) ($_ENV['SLOW_COMPENSATION'] ?? 0);
+        if ($delay > 0) {
+            error_log("  ← ReleaseStock: sleeping {$delay}s");
+            sleep($delay);
+        }
         error_log("  ← ReleaseStock: reservation={$payload['reservation_id']}");
         return [];
     }

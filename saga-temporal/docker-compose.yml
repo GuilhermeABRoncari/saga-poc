@@ -52,6 +52,7 @@ services:
       WORKER_SCRIPT: service-a-worker.php
       FORCE_FAIL: ${FORCE_FAIL:-}
       SLOW_RESERVE_STOCK: ${SLOW_RESERVE_STOCK:-0}
+      SLOW_COMPENSATION: ${SLOW_COMPENSATION:-0}
     command: ["rr", "serve", "-c", ".rr.yaml"]
 
   service-b-worker:
@@ -62,4 +63,17 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       WORKER_SCRIPT: service-b-worker.php
       FAIL_COMPENSATION: ${FAIL_COMPENSATION:-}
+      SLOW_COMPENSATION: ${SLOW_COMPENSATION:-0}
     command: ["rr", "serve", "-c", ".rr.yaml"]
+
+  alerter:
+    build: .
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      ALERT_LOG: /app/storage/alerts.log
+      ALERT_POLL_INTERVAL: 2
+    volumes:
+      - ./storage:/app/storage
+    command: ["php", "bin/alerter.php"]

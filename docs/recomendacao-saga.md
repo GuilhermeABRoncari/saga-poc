@@ -1,10 +1,12 @@
 # Recomendação de ferramenta SAGA — padrão organizacional
 
-> Este documento registra o **estado atual da decisão** sobre qual ferramenta adotar como padrão de SAGA para os sistemas da empresa (e-commerce, logística/transporte, financeiro, estoque). É a saída em andamento da tarefa de definição de padrão, complementar ao estudo em [`estudo.md`](./estudo.md) e à compreensão do padrão em [`compreensao-saga.md`](./compreensao-saga.md).
+> Este documento registra a **decisão sobre qual ferramenta adotar como padrão de SAGA** para os sistemas da empresa (e-commerce, logística/transporte, financeiro, estoque). É complementar ao estudo em [`estudo.md`](./estudo.md), à compreensão do padrão em [`compreensao-saga.md`](./compreensao-saga.md), e à síntese das 6 baterias de teste em [`fechamento.md`](./fechamento.md).
 >
-> **Status atual: recomendação em aberto.** Após revisão das premissas (ver §1.1), nenhum critério hoje disponível elimina honestamente as opções RabbitMQ+lib interna ou Temporal. As avaliações até aqui foram **especulativas** — derivadas de leitura de docs, comparações de feature lists e analogias com outras empresas. Sem PoC concreto não há base para fechar a recomendação.
+> **Status atual (2026-04-29): RECOMENDAÇÃO FECHADA — Adotar Temporal como padrão organizacional.**
 >
-> **Próximo passo:** plano de PoC comparativo (§3) com critérios de decisão registrados *antes* da implementação para evitar viés ex-post.
+> Esta recomendação está fundamentada em **20 testes Tier 1-6** executados contra duas PoCs reais. Detalhes em [`checklist-testes.md`](./checklist-testes.md), [`findings-rabbitmq.md`](./findings-rabbitmq.md), [`findings-temporal.md`](./findings-temporal.md), [`consideracoes.md`](./consideracoes.md) e [`fechamento.md`](./fechamento.md).
+>
+> **Sujeita a confirmação do tech lead** com base na pergunta-chave de §6 (frequência esperada de mudanças na forma das sagas).
 
 ---
 
@@ -47,7 +49,7 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 
 ## 2. Avaliação por ferramenta — estado atual
 
-Esta seção registra o que sabemos hoje. **Nenhuma das avaliações é veredito**: são hipóteses a serem testadas no PoC.
+> **Atualização pós-PoC (2026-04-29):** as hipóteses listadas abaixo foram validadas (ou refutadas) em 20 testes Tier 1-6. As "Hipóteses pró/contra" representam o estado pré-PoC; o resultado empírico está em [`consideracoes.md`](./consideracoes.md) §1, §2 e §3, e na síntese de [`fechamento.md`](./fechamento.md).
 
 ### 2.1 RabbitMQ + biblioteca interna `mobilestock/laravel-saga`
 
@@ -112,9 +114,11 @@ Esta seção registra o que sabemos hoje. **Nenhuma das avaliações é veredito
 
 Não substitui SAGA engine: sem state machine, sem compensação automática, sem replay. Continua sendo a opção certa para *job queue genérico*, não para *orquestração de SAGA*. Fora do PoC.
 
-## 3. Plano de PoC comparativo
+## 3. Plano de PoC comparativo (EXECUTADO — concluído em 2026-04-29)
 
-Objetivo: gerar evidência concreta antes de fechar a recomendação. Sem isso, qualquer escolha é narrativa.
+> **Status:** PoC concluída. 20 testes Tier 1-6 executados. Resultados em [`checklist-testes.md`](./checklist-testes.md) e [`fechamento.md`](./fechamento.md). Esta seção é mantida como **registro do plano original** que guiou a execução — os critérios de §3.2 foram congelados antes do PoC e seguidos rigorosamente para evitar viés ex-post.
+
+Objetivo (original): gerar evidência concreta antes de fechar a recomendação. Sem isso, qualquer escolha é narrativa.
 
 ### 3.1 Workflow de referência
 
@@ -179,7 +183,7 @@ Independente de qual ferramenta vencer, qualquer SAGA na empresa precisa cumprir
 
 Esses critérios são input do PoC: ambas as ferramentas precisam mostrar como atendem (nativamente ou via código nosso).
 
-## 5. Quando reavaliar premissas (antes do PoC fechar)
+## 5. Quando reavaliar premissas (mantido como referência histórica do plano pré-PoC)
 
 Se durante o PoC qualquer um destes mudar, parar e revisar antes de continuar:
 
@@ -188,6 +192,71 @@ Se durante o PoC qualquer um destes mudar, parar e revisar antes de continuar:
 - **Volume estimado de SAGAs ficar muito baixo** (<100/dia agregadas) → talvez nenhum dos dois se justifique; SQS + lógica simples basta.
 - **Algum sistema crítico precisar de SAGA antes do PoC fechar** → decisão pontual com SQS + compensação manual; não antecipa o padrão.
 
-## 6. Resumo de uma frase
+## 6. Pergunta-chave para validação com o tech lead
 
-A recomendação está **em aberto**: nenhuma das opções foi eliminada por critério técnico ou de infra após a revisão de premissas (EKS gradual + conectividade EKS↔Swarm via internet); avaliações até aqui foram especulativas, então o próximo passo é um **PoC comparativo** entre RabbitMQ+lib interna e Temporal, implementando o mesmo workflow de referência com critérios de decisão registrados *antes* da implementação para evitar viés ex-post.
+A pergunta concreta cuja resposta calibra peso final do achado mais sério (T5.1 — silent corruption sob reordenamento):
+
+> **"Com que frequência você espera mudar a forma de uma saga (adicionar step, reordenar, mudar compensação) vs mudar regras de negócio dentro dos passos?"**
+
+- **Se "raramente" (típico):** RabbitMQ ainda é viável, mas exige ~17-23 dias eng + disciplina permanente em 4 times. Risco residual de silent corruption se algum dev esquecer `saga_version`.
+- **Se "frequentemente" (atípico):** Temporal é seguro por construção. Risco T5.1 evitado estruturalmente.
+- **Se "não sabemos":** assumir defensivamente que mudanças vão acontecer — Temporal compra a garantia automaticamente.
+
+A resposta também calibra **timeline de adoção**: 4 sistemas × times independentes × deploys ao longo de anos = probabilidade cumulativa alta de incidentes mesmo se "raros".
+
+## 7. Recomendação fechada (2026-04-29)
+
+**Adotar Temporal como padrão organizacional para SAGA**, com as ressalvas técnicas abaixo.
+
+### 7.1 Justificativa primária
+
+20 testes Tier 1-6 executados confirmaram empiricamente:
+
+1. **T5.1 (silent corruption sob reordenamento de steps) — achado mais grave:** RabbitMQ-PoC marca saga `COMPLETED` com state corrompido (estoque 2x, pagamento perdido) sob mudança comum (reordenar steps em deploy). Temporal panic LOUD com mensagem clara. Em 4 sistemas durante anos, esquecimento humano é certeza cumulativa.
+2. **T1.4 + T4.1 (durable execution):** Temporal sobreviveu a 30s de Postgres caído + 10s de network outage; RabbitMQ-PoC: 3 workers caíram juntos com broker, sem reconexão automática.
+3. **T3.4 (postmortem rico):** Temporal entrega payloads de entrada e saída de cada step automaticamente; RabbitMQ-PoC só persiste `result` da lib — payloads de entrada são perdidos para sempre.
+4. **T4.4 (timeout vs error):** Temporal classifica 4 tipos distintos; RabbitMQ-PoC não tem conceito de timeout — handler travado bloqueia consumer.
+5. **T2.2 (cobertura automática de falhas):** Temporal classifica `Failed` para qualquer caminho de falha terminal; RabbitMQ-PoC exige código explícito por caminho (~3-5 dias eng + disciplina permanente).
+
+A natureza qualitativa desses critérios (correção, durabilidade, observabilidade) supera os quantitativos onde RabbitMQ ganha (latência p99 22ms vs 351ms; RAM idle 170 MB vs 439 MB; custo Cloud em escala $58k/ano).
+
+### 7.2 Ressalvas técnicas
+
+- **Custo de adoção real existe:** ~1 semestre de calibração para o time interiorizar a dialética determinística (proibido `date()`, `rand()`, `PDO`, `Http::` em workflow code). Mitigação: pacote interno `mobilestock/laravel-temporal-saga` + lint PHPStan + treinamento + apps/_template_.
+- **Cloud só nos primeiros 6-12 meses.** Cálculo de TCO em [`fechamento.md`](./fechamento.md) §3.2 e [`consideracoes.md`](./consideracoes.md) §7: a partir de ~10M actions/mês (qualquer dos 4 sistemas após adotado), self-host EKS é financeiramente obrigatório.
+- **PECL grpc + RoadRunner pesam no setup local.** Aceitar como custo one-time per-dev (~25 min na primeira vez).
+- **Race condition na inicialização** (workers tentam conectar antes do server pronto): adicionar healthcheck gRPC + `depends_on` no compose canônico.
+- **SDK PHP é "segunda classe"** (Spiral Scout sob contrato com Temporal Inc): mitigar com pacote interno isolando apps do SDK; fork é viável (Apache 2.0).
+
+### 7.3 Alternativa minoritária
+
+Se o tech lead responder à pergunta de §6 com "**a forma da saga muda raramente E o time se compromete a manter `saga_version` + lint custom + code review centralizado SEM falhar**", então RabbitMQ + lib `mobilestock/saga` continua viável.
+
+Custo: ~17-23 dias eng inicial + manutenção recorrente + risco residual permanente. Não é recomendação errada per se; é recomendação **mais arriscada** dado o histórico humano de esquecimentos em deploys.
+
+### 7.4 Casos pontuais
+
+Casos pontuais que **não justificam adotar plataforma nova** (1-2 fluxos isolados, sistema legado sem prazo de migração) podem usar **SQS + lógica simples + idempotência + alerta manual**. **Não tornar isso padrão.**
+
+### 7.5 Próximos passos
+
+1. **Validar com o tech lead** apresentando este documento + [`fechamento.md`](./fechamento.md) + reprodução de T5.1 ao vivo ou em vídeo curto.
+2. **Decidir Cloud vs self-host EKS** para os primeiros 6 meses (recomendação: começar Cloud para reduzir overhead inicial).
+3. **Construir `mobilestock/laravel-temporal-saga`** como pacote interno encapsulando RoadRunner + retry policies padrão + helpers de Saga + sanity checks de determinismo.
+4. **Treinar primeiros devs** com workshop de 1-2 dias + apps/_template_ canônico.
+5. **Migrar primeiro caso real** — `ActivateStoreSaga` no `marketplace-api` (PR #2021 do backend).
+6. **Estabelecer governance:** ADR + lint PHPStan (proíbe `date()`, `rand()`, `PDO`, `Http::` em workflow code) + code review centralizado nas primeiras 4-6 semanas.
+
+## 8. Quando reavaliar a recomendação
+
+Se durante a adoção qualquer um destes mudar, parar e revisar antes de continuar:
+
+- **Volume real de sagas se confirmar muito baixo** (<1000/dia agregadas) → reconsiderar SQS + lógica simples.
+- **Tech lead responder à pergunta de §6 com "raramente E o time mantém disciplina"** → revisar tradeoff RabbitMQ vs Temporal.
+- **Spiral Scout perder contrato com Temporal Inc** → re-avaliar SDK PHP (custo de fork ~viável).
+- **AWS lançar Step Functions com SDK PHP nativo + custo razoável** → reconsiderar.
+- **Migração EKS for cancelada** → reabrir avaliação (Temporal não suporta Swarm oficialmente).
+
+## 9. Resumo de uma frase
+
+A recomendação está **fechada** após 20 testes Tier 1-6 contra PoCs reais: **adotar Temporal como padrão organizacional**, primariamente porque RabbitMQ-PoC produziu silent corruption real em cenário comum (reordenar steps mid-deploy) enquanto Temporal panicou loud com mensagem clara — em 4 sistemas durante anos com 4 times deploying, a probabilidade cumulativa de esquecer mitigação manual no RabbitMQ é alta demais para ser padrão organizacional, mesmo com o trade-off de ~1 semestre de calibração com a dialética determinística do Temporal.

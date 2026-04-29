@@ -8,6 +8,9 @@ final class ReserveStockHandler
 {
     public function __invoke(array $payload): array
     {
+        if (($_ENV['FORCE_FAIL'] ?? '') === 'step1') {
+            throw new \RuntimeException('forced failure on reserve_stock (step1)');
+        }
         $delay = (int) ($_ENV['SLOW_RESERVE_STOCK'] ?? 0);
         if ($delay > 0) {
             echo "  → ReserveStock: sleeping {$delay}s (resilience test)\n";
