@@ -67,6 +67,12 @@ final class SagaOrchestrator
             echo "[orchestrator] saga={$sagaId} COMPENSATED\n";
             return;
         }
+
+        if ($type === 'compensation.failed') {
+            echo "[orchestrator] saga={$sagaId} compensation step={$stepIndex} FAILED → marking saga FAILED\n";
+            $this->repo->setStatus($sagaId, 'FAILED');
+            return;
+        }
     }
 
     private function dispatchStep(string $sagaId, int $stepIndex, array $payload): void

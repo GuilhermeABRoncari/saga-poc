@@ -61,4 +61,5 @@ services:
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       WORKER_SCRIPT: service-b-worker.php
+      FAIL_COMPENSATION: ${FAIL_COMPENSATION:-}
     command: ["rr", "serve", "-c", ".rr.yaml"]

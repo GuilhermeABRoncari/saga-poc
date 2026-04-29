@@ -15,6 +15,9 @@ final class ServiceBActivities implements ServiceBActivitiesInterface
 
     public function refundCredit(array $payload): array
     {
+        if (($_ENV['FAIL_COMPENSATION'] ?? '') === 'refund') {
+            throw new \RuntimeException('forced failure on refund_credit (compensation)');
+        }
         error_log("  ← RefundCredit: charge={$payload['charge_id']}");
         return [];
     }

@@ -47,4 +47,5 @@ services:
     environment:
       AMQP_HOST: rabbitmq
       SERVICE_NAME: service-b
+      FAIL_COMPENSATION: ${FAIL_COMPENSATION:-}
     command: ["php", "bin/service-b.php"]

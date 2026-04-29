@@ -63,9 +63,8 @@ final class ServiceWorker
             $this->emit($eventsQueue, $sagaId, $step, 'step.completed', $result);
         } catch (\Throwable $e) {
             echo "[{$this->serviceName}] saga={$sagaId} step={$step} FAILED: {$e->getMessage()}\n";
-            if (!$isCompensation) {
-                $this->emit($eventsQueue, $sagaId, $step, 'step.failed', ['error' => $e->getMessage()]);
-            }
+            $eventType = $isCompensation ? 'compensation.failed' : 'step.failed';
+            $this->emit($eventsQueue, $sagaId, $step, $eventType, ['error' => $e->getMessage()]);
         }
     }
 
