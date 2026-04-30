@@ -118,7 +118,7 @@
 
 | Termo                                           | Significado                                                                                                              |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **PDO**                                         | **PHP Data Objects** — abstração de DB do PHP. Usado na PoC RabbitMQ para SQLite/Postgres/MySQL.                          |
+| **PDO**                                         | **PHP Data Objects** — abstração de DB do PHP. Usado na PoC RabbitMQ para SQLite/Postgres/MySQL.                         |
 | **WAL**                                         | **Write-Ahead Logging** — modo de SQLite que permite leituras concorrentes com 1 writer. Habilitado em T6.2.             |
 | **PRAGMA busy_timeout**                         | Diretiva SQLite que define quanto tempo (ms) esperar antes de falhar em "database is locked".                            |
 | **opcache**                                     | Cache de bytecode do PHP. Habilitado em FPM, desabilitado em CLI por default.                                            |

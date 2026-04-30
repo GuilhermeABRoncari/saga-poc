@@ -8,16 +8,16 @@
 
 ## 1. Esforço até happy path
 
-| Métrica | Valor | Comparação |
-|---|---|---|
-| Sessão de implementação | 1 (~1.5h, contando ajustes) | RabbitMQ ~2h; Temporal ~3h |
-| LOC totais (PHP + JSON, sem bench) | **~440** (state-machine.json 119 + ActivityWorker 87 + 2 workers 108 + trigger 60 + bootstrap 66) | RabbitMQ 632; Temporal 237 |
-| LOC do "workflow" (state-machine.json) | **119** (ASL JSON) | RabbitMQ 381 lib em 6 arquivos; Temporal 77 workflow |
-| LOC dos 2 service workers + ActivityWorker base | 195 (87 + 61 + 47) | RabbitMQ 73 (handlers); Temporal 96 (activities) |
-| LOC do bin (trigger, bench, alerter, bootstrap, update-asl, sustained, batch) | ~340 | RabbitMQ 140; Temporal 64 |
-| Composer deps | 2 (`aws/aws-sdk-php`, `ramsey/uuid`) | RabbitMQ 3; Temporal 3 |
-| Containers Docker | 5 (localstack + bootstrap + 2 workers + alerter) | RabbitMQ 5; Temporal 7 |
-| Tempo do primeiro `docker compose up --build` | ~2 min (LocalStack pull domina) | RabbitMQ ~2 min; Temporal ~25 min |
+| Métrica                                                                       | Valor                                                                                             | Comparação                                           |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Sessão de implementação                                                       | 1 (~1.5h, contando ajustes)                                                                       | RabbitMQ ~2h; Temporal ~3h                           |
+| LOC totais (PHP + JSON, sem bench)                                            | **~440** (state-machine.json 119 + ActivityWorker 87 + 2 workers 108 + trigger 60 + bootstrap 66) | RabbitMQ 632; Temporal 237                           |
+| LOC do "workflow" (state-machine.json)                                        | **119** (ASL JSON)                                                                                | RabbitMQ 381 lib em 6 arquivos; Temporal 77 workflow |
+| LOC dos 2 service workers + ActivityWorker base                               | 195 (87 + 61 + 47)                                                                                | RabbitMQ 73 (handlers); Temporal 96 (activities)     |
+| LOC do bin (trigger, bench, alerter, bootstrap, update-asl, sustained, batch) | ~340                                                                                              | RabbitMQ 140; Temporal 64                            |
+| Composer deps                                                                 | 2 (`aws/aws-sdk-php`, `ramsey/uuid`)                                                              | RabbitMQ 3; Temporal 3                               |
+| Containers Docker                                                             | 5 (localstack + bootstrap + 2 workers + alerter)                                                  | RabbitMQ 5; Temporal 7                               |
+| Tempo do primeiro `docker compose up --build`                                 | ~2 min (LocalStack pull domina)                                                                   | RabbitMQ ~2 min; Temporal ~25 min                    |
 
 ### Bugs encontrados durante o build
 
@@ -29,15 +29,16 @@
 
 ## 2. Esforço de compensação completa
 
-| Métrica | Valor |
-|---|---|
-| Implementação de compensação LIFO | **Catch chain em ASL**: cada step tem `Catch` apontando para o próximo passo da cadeia de reversão. ConfirmShipping fail → RefundCredit → ReleaseStock → Compensated. |
-| LOC dedicadas a compensação no ASL | ~25 (Catch blocks + states de compensação) |
-| LOC de handlers de compensação (workers) | 12 (releaseStock + refundCredit) |
-| Padrão LIFO | ✅ via Catch chain manual |
-| Compensação paralela | ❌ não nativo; teria que usar `Type: Parallel` state — refator significativo do ASL |
+| Métrica                                  | Valor                                                                                                                                                                 |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Implementação de compensação LIFO        | **Catch chain em ASL**: cada step tem `Catch` apontando para o próximo passo da cadeia de reversão. ConfirmShipping fail → RefundCredit → ReleaseStock → Compensated. |
+| LOC dedicadas a compensação no ASL       | ~25 (Catch blocks + states de compensação)                                                                                                                            |
+| LOC de handlers de compensação (workers) | 12 (releaseStock + refundCredit)                                                                                                                                      |
+| Padrão LIFO                              | ✅ via Catch chain manual                                                                                                                                             |
+| Compensação paralela                     | ❌ não nativo; teria que usar `Type: Parallel` state — refator significativo do ASL                                                                                   |
 
 Compensação **funcionou** ponta a ponta:
+
 - saga `381b8ea1` com `FORCE_FAIL=step3` → ConfirmShipping falhou → RefundCredit (3s sleep) → ReleaseStock (3s sleep) → COMPENSATED.
 - Sequência LIFO correta nos logs dos workers.
 
@@ -71,14 +72,14 @@ Step Functions entrega observabilidade rica em AWS real (próxima do Temporal We
 
 ## 4. Esforço para observabilidade aceitável (estimativa)
 
-| Componente | Esforço estimado | Comparação |
-|---|---|---|
-| Métricas básicas | ✅ grátis (CloudWatch) | RabbitMQ: 4-6h |
-| Timeline visual | ✅ grátis (Step Functions Console em AWS real) | RabbitMQ: 1 dia |
-| Replay/postmortem | ⚠️ via getExecutionHistory + reproduzir manualmente | Temporal: grátis |
-| Alerta de falha | ~15 lines YAML CloudWatch Alarm + SNS | similar a Temporal |
-| Search/filter | ✅ via `listExecutions` filters | similar a Temporal |
-| **Total** | **~0.5 dia** (em AWS real) | RabbitMQ ~3-5 dias; Temporal ~1 dia |
+| Componente        | Esforço estimado                                    | Comparação                          |
+| ----------------- | --------------------------------------------------- | ----------------------------------- |
+| Métricas básicas  | ✅ grátis (CloudWatch)                              | RabbitMQ: 4-6h                      |
+| Timeline visual   | ✅ grátis (Step Functions Console em AWS real)      | RabbitMQ: 1 dia                     |
+| Replay/postmortem | ⚠️ via getExecutionHistory + reproduzir manualmente | Temporal: grátis                    |
+| Alerta de falha   | ~15 lines YAML CloudWatch Alarm + SNS               | similar a Temporal                  |
+| Search/filter     | ✅ via `listExecutions` filters                     | similar a Temporal                  |
+| **Total**         | **~0.5 dia** (em AWS real)                          | RabbitMQ ~3-5 dias; Temporal ~1 dia |
 
 Custo de observabilidade no Step Functions é baixo, mas amarrado ao stack AWS.
 
@@ -128,6 +129,7 @@ Mesmo padrão de Temporal — workers stateless, podem morrer e voltar; tasks fi
 **Setup:** SLOW=20, fire saga, `docker stop localstack` aos 4s, esperar 30s, restart.
 
 **Resultado:** ❌ **TODO O STATE FOI PERDIDO.**
+
 - Saga `dd095714` retornou `ExecutionDoesNotExist`.
 - State machine retornou `0` em `listStateMachines`.
 - Activity ARNs perdidos.
@@ -138,6 +140,7 @@ Mesmo padrão de Temporal — workers stateless, podem morrer e voltar; tasks fi
 **Em AWS real:** Step Functions tem multi-AZ durability; uma "queda" do serviço é evento extremamente raro e executions sobrevivem a falhas de AZ individual.
 
 **Comparação:**
+
 - Temporal (T1.4): sobreviveu a 30s de Postgres parado, retomou normalmente.
 - RabbitMQ (T1.4): workers caíram com broker; após restart manual, mensagens em queue durable foram processadas.
 - Step Functions/LocalStack: perda total de state — **arquitetonicamente possível recuperar em AWS real, mas no nosso ambiente local impossível**.
@@ -146,13 +149,13 @@ Mesmo padrão de Temporal — workers stateless, podem morrer e voltar; tasks fi
 
 ## 7. Operação simulada
 
-| Aspecto | Step Functions (LocalStack) | Step Functions (AWS real) |
-|---|---|---|
-| Setup local | ~2 min (pull LocalStack image) | n/a |
-| Containers | 5 (localstack + bootstrap + 2 workers + alerter) | n/a — managed |
-| Self-host EKS | n/a — Step Functions é always-managed | n/a — managed |
-| Healthcheck workers | warm-up necessário (~10s) antes de disparar saga | mesmo |
-| Logs | stdout dos workers | CloudWatch + LocalStack stdout |
+| Aspecto             | Step Functions (LocalStack)                      | Step Functions (AWS real)      |
+| ------------------- | ------------------------------------------------ | ------------------------------ |
+| Setup local         | ~2 min (pull LocalStack image)                   | n/a                            |
+| Containers          | 5 (localstack + bootstrap + 2 workers + alerter) | n/a — managed                  |
+| Self-host EKS       | n/a — Step Functions é always-managed            | n/a — managed                  |
+| Healthcheck workers | warm-up necessário (~10s) antes de disparar saga | mesmo                          |
+| Logs                | stdout dos workers                               | CloudWatch + LocalStack stdout |
 
 Em AWS real, operação é zero — nem cluster nem nodes para gerenciar. **Esse é o maior atrativo do Step Functions vs Temporal self-host.**
 
@@ -167,12 +170,12 @@ Step Functions é **always-managed**, pay-per-use. Cálculo para volume agregado
 
 Comparação:
 
-| Plataforma | Custo 12 meses (volume agregado) |
-|---|---|
-| RabbitMQ self-hosted | $2400-4800 + ~17-23 dias eng |
-| Temporal Cloud | ~$58k/ano (estimado em T6.1) |
-| Temporal self-host EKS | $3-6k/ano + ~15-30 dias eng |
-| Step Functions Standard | **~$51k/ano** |
+| Plataforma              | Custo 12 meses (volume agregado) |
+| ----------------------- | -------------------------------- |
+| RabbitMQ self-hosted    | $2400-4800 + ~17-23 dias eng     |
+| Temporal Cloud          | ~$58k/ano (estimado em T6.1)     |
+| Temporal self-host EKS  | $3-6k/ano + ~15-30 dias eng      |
+| Step Functions Standard | **~$51k/ano**                    |
 
 **Step Functions é financeiramente próximo do Temporal Cloud em escala.** Vantagem: zero ops. Desvantagem: lock-in profundo + custo escala com cada transição (não com volume de "trabalho útil").
 
@@ -190,27 +193,28 @@ Comparação:
 
 ## 10. Comparação direta com RabbitMQ e Temporal
 
-| Critério | RabbitMQ | Temporal | Step Functions | Quem ganha |
-|---|---|---|---|---|
-| LOC totais (PHP, sem bench) | 632 | 237 | ~440 | **Temporal** |
-| LOC do "workflow" | 381 | 77 | 119 (ASL) | **Temporal** |
-| Setup local 1ª vez | ~2 min | ~25 min | ~2 min | **RabbitMQ / Step Functions** (empate) |
-| Composer deps | 3 | 3 | 2 | **Step Functions** (marginal) |
-| Containers | 5 | 7 | 5 | empate |
-| Throughput burst (100 sagas) | 48/s | 28/s | **10.9/s** | **RabbitMQ** |
-| Throughput sustentado | 9.7/s | 9.5/s | **7.5/s** | RabbitMQ/Temporal |
-| Latência fim-a-fim p99 | **22ms** | 351ms | **2092ms** | **RabbitMQ** |
-| Resiliência a infra failure | ⚠️ workers caem | ✅ retoma | ❌ LocalStack perdeu state | **Temporal** |
-| Compensação paralela | ⚠️ por arquitetura | ✅ 1 LOC switch | ❌ exige rewrite ASL para Parallel state | **Temporal** |
-| Observabilidade default | ❌ logs | ✅ Temporal Web UI | ✅ Step Functions Console (AWS real) | **Temporal / Step Functions** |
-| Postmortem | ⚠️ 2-15 min | ✅ 30s-1min | ✅ via API/Console | **Temporal / Step Functions** |
-| Versionamento — sagas em voo | ❌ silent corruption | ✅ panic LOUD | ⚠️ silent migration (LocalStack) / pinning (AWS real) | **Temporal** |
-| Lock-in | ✅ AMQP padrão | ⚠️ moderado | ❌ profundo (AWS) | **RabbitMQ** |
-| Custo financeiro 12 meses (volume agregado) | ~$3k + 17-23 dias eng | ~$58k Cloud / ~$5k self-host + 15 dias eng | ~$51k | **RabbitMQ / Temporal self-host** |
-| Operação | ⚠️ clustering | ⚠️ cluster ou Cloud | ✅✅ zero ops (managed) | **Step Functions** |
-| Bus factor | ❌ lib interna | ✅ SDK público | ✅✅ AWS oficial | **Step Functions** |
+| Critério                                    | RabbitMQ              | Temporal                                   | Step Functions                                        | Quem ganha                             |
+| ------------------------------------------- | --------------------- | ------------------------------------------ | ----------------------------------------------------- | -------------------------------------- |
+| LOC totais (PHP, sem bench)                 | 632                   | 237                                        | ~440                                                  | **Temporal**                           |
+| LOC do "workflow"                           | 381                   | 77                                         | 119 (ASL)                                             | **Temporal**                           |
+| Setup local 1ª vez                          | ~2 min                | ~25 min                                    | ~2 min                                                | **RabbitMQ / Step Functions** (empate) |
+| Composer deps                               | 3                     | 3                                          | 2                                                     | **Step Functions** (marginal)          |
+| Containers                                  | 5                     | 7                                          | 5                                                     | empate                                 |
+| Throughput burst (100 sagas)                | 48/s                  | 28/s                                       | **10.9/s**                                            | **RabbitMQ**                           |
+| Throughput sustentado                       | 9.7/s                 | 9.5/s                                      | **7.5/s**                                             | RabbitMQ/Temporal                      |
+| Latência fim-a-fim p99                      | **22ms**              | 351ms                                      | **2092ms**                                            | **RabbitMQ**                           |
+| Resiliência a infra failure                 | ⚠️ workers caem       | ✅ retoma                                  | ❌ LocalStack perdeu state                            | **Temporal**                           |
+| Compensação paralela                        | ⚠️ por arquitetura    | ✅ 1 LOC switch                            | ❌ exige rewrite ASL para Parallel state              | **Temporal**                           |
+| Observabilidade default                     | ❌ logs               | ✅ Temporal Web UI                         | ✅ Step Functions Console (AWS real)                  | **Temporal / Step Functions**          |
+| Postmortem                                  | ⚠️ 2-15 min           | ✅ 30s-1min                                | ✅ via API/Console                                    | **Temporal / Step Functions**          |
+| Versionamento — sagas em voo                | ❌ silent corruption  | ✅ panic LOUD                              | ⚠️ silent migration (LocalStack) / pinning (AWS real) | **Temporal**                           |
+| Lock-in                                     | ✅ AMQP padrão        | ⚠️ moderado                                | ❌ profundo (AWS)                                     | **RabbitMQ**                           |
+| Custo financeiro 12 meses (volume agregado) | ~$3k + 17-23 dias eng | ~$58k Cloud / ~$5k self-host + 15 dias eng | ~$51k                                                 | **RabbitMQ / Temporal self-host**      |
+| Operação                                    | ⚠️ clustering         | ⚠️ cluster ou Cloud                        | ✅✅ zero ops (managed)                               | **Step Functions**                     |
+| Bus factor                                  | ❌ lib interna        | ✅ SDK público                             | ✅✅ AWS oficial                                      | **Step Functions**                     |
 
 **Score qualitativo:**
+
 - **Temporal vence em correção, observabilidade, throughput vs Step Functions, e versionamento.**
 - **RabbitMQ vence em latência, throughput e custo.**
 - **Step Functions vence em operação zero, bus factor, e lock-in da plataforma (AWS oficial).**

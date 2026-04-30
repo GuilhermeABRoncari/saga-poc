@@ -16,14 +16,14 @@
 
 A tarefa não é escolher ferramenta para um caso pontual (ex.: ativação de loja no `marketplace-api`). É **definir o padrão que será imposto a todos os sistemas** que usarão SAGA daqui pra frente. Isso muda os critérios de avaliação:
 
-| Critério | Caso pontual | Padrão organizacional |
-|---|---|---|
-| Custo de adoção inicial | Alto | Diluído (paga uma vez, vários consumidores) |
-| Curva de aprendizado | Custo direto | Investimento que se amortiza |
-| Lock-in de fornecedor | Pouco importa | Crítico |
-| Determinismo / debugabilidade | "Bom ter" | Obrigatório (auditoria, postmortems) |
-| Padronização entre apps | Marginal | É **o objetivo** da tarefa |
-| Substrato de execução | Swarm hoje | Swarm + EKS gradual (ver §1.1) |
+| Critério                      | Caso pontual  | Padrão organizacional                       |
+| ----------------------------- | ------------- | ------------------------------------------- |
+| Custo de adoção inicial       | Alto          | Diluído (paga uma vez, vários consumidores) |
+| Curva de aprendizado          | Custo direto  | Investimento que se amortiza                |
+| Lock-in de fornecedor         | Pouco importa | Crítico                                     |
+| Determinismo / debugabilidade | "Bom ter"     | Obrigatório (auditoria, postmortems)        |
+| Padronização entre apps       | Marginal      | É **o objetivo** da tarefa                  |
+| Substrato de execução         | Swarm hoje    | Swarm + EKS gradual (ver §1.1)              |
 
 Escala esperada: 4 sistemas (e-commerce, logística, financeiro, estoque) interagindo entre si via SAGAs. Inevitavelmente, vão surgir fluxos do tipo: "pedido cria reserva no estoque, dispara pagamento, agenda transporte" — clássico cenário de orquestração multi-serviço.
 
@@ -56,6 +56,7 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 ### 2.1 RabbitMQ + biblioteca interna `mobilestock/laravel-saga`
 
 **Hipóteses pró:**
+
 - Time já domina filas e Laravel; curva de aprendizado baixa para o transport.
 - Sem novo runtime (RoadRunner) nem novo modelo de execução (workflows determinísticos).
 - Controle total da API: ergonomia pode ser desenhada para o jeito Laravel da casa.
@@ -63,11 +64,13 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 - Convive bem com Swarm e EKS sem mudança de runtime.
 
 **Hipóteses contra (a validar):**
+
 - Construir state machine + outbox + DLX + idempotência + observabilidade é trabalho recorrente.
 - Sem UI de debug equivalente à Temporal Web — precisaríamos investir em Grafana/traces customizados.
 - "Padronização" via lib interna depende de disciplina permanente para mantê-la viva e ergonômica.
 
 **O que o PoC precisa medir:**
+
 - LOC e horas até o happy path do workflow de referência.
 - LOC e horas para cobrir compensação de todos os caminhos de falha.
 - Esforço para construir visibilidade mínima aceitável (saga em andamento, falhas, compensações).
@@ -76,6 +79,7 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 ### 2.2 Temporal (Cloud ou self-hosted)
 
 **Hipóteses pró:**
+
 - SAGA first-class via `Workflow\Saga` — compensação declarativa, LIFO automático.
 - Durable execution: estado da saga vive no engine, sobrevive a crashes/deploys.
 - UI de timeline (Temporal Web) entrega observabilidade out-of-the-box.
@@ -83,6 +87,7 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 - Temporal Cloud reduz overhead operacional inicial.
 
 **Hipóteses contra (a validar):**
+
 - SDK PHP é mantido pela Spiral Scout, não pelo core Temporal — risco de defasagem em features novas.
 - RoadRunner obrigatório nos workers — runtime extra para cada app que orquestra.
 - Restrições de determinismo (proibido `date()`, `sleep()`, `rand()`, DB, HTTP em workflow code) são contraintuitivas para time Laravel-first; risco de bugs sutis.
@@ -90,6 +95,7 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 - Custo Temporal Cloud cresce com volume; self-hosted exige Postgres + Elasticsearch + 4 serviços (Frontend/History/Matching/Worker).
 
 **O que o PoC precisa medir:**
+
 - Tempo de onboarding até primeiro workflow rodando (incluindo RoadRunner).
 - Frequência de erros de determinismo durante desenvolvimento.
 - Custo de Temporal Cloud no volume estimado dos próximos 12 meses.
@@ -99,12 +105,14 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 ### 2.3 AWS Step Functions
 
 **Hipóteses pró:**
+
 - Managed (sem operação de cluster).
 - SAGA suportado via `Catch`/`Retry` declarativo.
 - Observabilidade nativa (CloudWatch + X-Ray).
 - Integração direta com SQS, Lambda, EventBridge.
 
 **Hipóteses contra:**
+
 - State machine vive em **JSON separado do código** Laravel — versionamento, code review e testes ficam fora do fluxo PHP.
 - Custo por transição (~US$ 0,025 por 1000 transições) escala desfavoravelmente em e-commerce.
 - Lock-in AWS profundo; migração futura ou estratégia multi-cloud exige refazer N workflows.
@@ -114,7 +122,7 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 
 ### 2.4 SQS puro
 
-Não substitui SAGA engine: sem state machine, sem compensação automática, sem replay. Continua sendo a opção certa para *job queue genérico*, não para *orquestração de SAGA*. Fora do PoC.
+Não substitui SAGA engine: sem state machine, sem compensação automática, sem replay. Continua sendo a opção certa para _job queue genérico_, não para _orquestração de SAGA_. Fora do PoC.
 
 ## 3. Plano de PoC comparativo (EXECUTADO — concluído em 2026-04-29)
 
@@ -127,6 +135,7 @@ Objetivo (original): gerar evidência concreta antes de fechar a recomendação.
 Implementar o **mesmo** workflow nas duas opções finalistas. Candidato natural: `ActivateStoreSaga` (caso do PR #2021 do backend), que já tem 5 passos atravessando `marketplace-api` ↔ `users-api` com compensação completa documentada em [`compreensao-saga.md`](./compreensao-saga.md) §3.3.
 
 Se `ActivateStoreSaga` for grande demais para PoC, usar uma versão reduzida:
+
 1. Passo A em `marketplace-api` (transação local com compensação).
 2. Passo B em `users-api` (chamada HTTP com compensação).
 3. Passo C que falha intencionalmente em alguns runs para exercitar compensação.
@@ -137,17 +146,17 @@ O importante: **mesmo escopo nos dois PoCs**, mesmos pontos de falha, mesmos req
 
 Pontuar cada ferramenta nos critérios abaixo. Pesos podem ser ajustados, mas **lista é congelada antes do PoC** para evitar que o resultado defina os critérios.
 
-| Critério | Como medir | Por que importa |
-|---|---|---|
-| **Esforço até happy path** | Horas reais até workflow completo rodando em ambiente local | Mede curva de aprendizado e DX inicial |
-| **Esforço de compensação completa** | LOC + horas para cobrir todos os caminhos de falha | Mede o ganho real de SAGA first-class vs construído |
-| **Observabilidade out-of-the-box** | O que enxergamos sem investimento extra (saga em andamento, falhas, payloads) | Diferencial frequentemente alegado do Temporal |
+| Critério                                   | Como medir                                                                               | Por que importa                                                     |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **Esforço até happy path**                 | Horas reais até workflow completo rodando em ambiente local                              | Mede curva de aprendizado e DX inicial                              |
+| **Esforço de compensação completa**        | LOC + horas para cobrir todos os caminhos de falha                                       | Mede o ganho real de SAGA first-class vs construído                 |
+| **Observabilidade out-of-the-box**         | O que enxergamos sem investimento extra (saga em andamento, falhas, payloads)            | Diferencial frequentemente alegado do Temporal                      |
 | **Esforço para observabilidade aceitável** | Horas para chegar ao mínimo aceitável (dashboard de sagas + alerta de compensação falha) | Custo real do RabbitMQ se o ganho do Temporal Web for significativo |
-| **DX em code review** | Reviewer consegue entender o fluxo sem rodar? Onde mora a lógica? | Crítico para padrão organizacional usado por 4 times |
-| **Resiliência simulada** | Matar worker mid-flight; simular deploy mid-flight; falha de compensação | Sem isso, durable execution é só promessa |
-| **Operação simulada** | Quanto da operação cai no time vs no engine/managed | Mede overhead recorrente, não inicial |
-| **Custo projetado 12 meses** | Cloud + infra + horas-engenheiro de manutenção | Padronização tem custo, é preciso medir |
-| **Risco de SDK/lib decair** | SDK PHP do Temporal: cadência de release; lib interna: bus factor | Padrão precisa sobreviver a saídas de pessoas |
+| **DX em code review**                      | Reviewer consegue entender o fluxo sem rodar? Onde mora a lógica?                        | Crítico para padrão organizacional usado por 4 times                |
+| **Resiliência simulada**                   | Matar worker mid-flight; simular deploy mid-flight; falha de compensação                 | Sem isso, durable execution é só promessa                           |
+| **Operação simulada**                      | Quanto da operação cai no time vs no engine/managed                                      | Mede overhead recorrente, não inicial                               |
+| **Custo projetado 12 meses**               | Cloud + infra + horas-engenheiro de manutenção                                           | Padronização tem custo, é preciso medir                             |
+| **Risco de SDK/lib decair**                | SDK PHP do Temporal: cadência de release; lib interna: bus factor                        | Padrão precisa sobreviver a saídas de pessoas                       |
 
 ### 3.3 Estrutura física do PoC
 

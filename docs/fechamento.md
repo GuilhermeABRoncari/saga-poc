@@ -10,15 +10,15 @@
 
 ## 1. O que foi testado
 
-| Tier | Testes | Status |
-|---|---|---|
-| 1 — Alto valor, baixo custo | T1.1 versionamento; T1.2 at-least-once; T1.3 100 sagas concorrentes; T1.4 falha de persistência; T1.5 `Workflow::getVersion()` | 5/5 |
-| 2 — Lacunas grandes | T2.1 dashboard Grafana (estimado); T2.2 alerta de falha (implementado); T2.3 compensação paralela; T2.4 blind dev (não-executável) | 3/4 |
-| 3 — Operacional | T3.1 setup novo dev (estimado); T3.2 footprint idle; T3.3 sustained load 5min; T3.4 postmortem | 3/4 |
-| 4 — Resiliência adicional | T4.1 falha de rede; T4.2 falha de storage; T4.3 falha em step 1; T4.4 timeout vs error | 4/4 |
-| 5 — Versionamento ampliado | T5.1 reordenar steps; T5.2 mudar shape de payload | 2/2 |
-| 6 — Custo real | T6.1 Cloud em escala (estimado); T6.2 p99 fim-a-fim | 1/2 |
-| **Total** | **20 testes** | **18 executados, 2 não-executáveis** |
+| Tier                        | Testes                                                                                                                             | Status                               |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| 1 — Alto valor, baixo custo | T1.1 versionamento; T1.2 at-least-once; T1.3 100 sagas concorrentes; T1.4 falha de persistência; T1.5 `Workflow::getVersion()`     | 5/5                                  |
+| 2 — Lacunas grandes         | T2.1 dashboard Grafana (estimado); T2.2 alerta de falha (implementado); T2.3 compensação paralela; T2.4 blind dev (não-executável) | 3/4                                  |
+| 3 — Operacional             | T3.1 setup novo dev (estimado); T3.2 footprint idle; T3.3 sustained load 5min; T3.4 postmortem                                     | 3/4                                  |
+| 4 — Resiliência adicional   | T4.1 falha de rede; T4.2 falha de storage; T4.3 falha em step 1; T4.4 timeout vs error                                             | 4/4                                  |
+| 5 — Versionamento ampliado  | T5.1 reordenar steps; T5.2 mudar shape de payload                                                                                  | 2/2                                  |
+| 6 — Custo real              | T6.1 Cloud em escala (estimado); T6.2 p99 fim-a-fim                                                                                | 1/2                                  |
+| **Total**                   | **20 testes**                                                                                                                      | **18 executados, 2 não-executáveis** |
 
 ---
 
@@ -29,6 +29,7 @@
 **T5.1 — Silent corruption sob reordenamento de steps (ACHADO MAIS GRAVE DO ESTUDO)**
 
 Reordenar a ordem de `addCompensation` / steps em `definition()` enquanto sagas estão em voo:
+
 - **Temporal:** panic explícito `[TMPRL1100] history event is ServiceA.reserveStock, replay command is ServiceB.chargeCredit`. Workflow stuck em retry até intervenção. Estado preservado.
 - **RabbitMQ-PoC:** saga marcada `COMPLETED` com state corrompido — saga `9b1213c2`: `reserveStock` executou 2x, `chargeCredit` nunca rodou, pedido marcado completo. **Sem qualquer alerta, log de erro ou sinal externo.**
 
@@ -60,11 +61,11 @@ RabbitMQ p50=21ms / p99=22ms (max 25ms, distribuição apertada). Temporal p50=6
 
 **T1.3 + T3.2 + T3.3 — Footprint operacional**
 
-| | RabbitMQ | Temporal |
-|---|---|---|
-| RAM idle (stack) | 170 MB | 439 MB (~2.6x) |
-| Imagens Docker | 665 MB | 3800 MB (~6x) |
-| Cold start cacheado | ~10s | ~30s |
+|                            | RabbitMQ | Temporal                    |
+| -------------------------- | -------- | --------------------------- |
+| RAM idle (stack)           | 170 MB   | 439 MB (~2.6x)              |
+| Imagens Docker             | 665 MB   | 3800 MB (~6x)               |
+| Cold start cacheado        | ~10s     | ~30s                        |
 | Setup novo dev (sem cache) | ~2-3 min | ~25 min (PECL grpc compile) |
 
 **T6.1 — Custo Cloud em escala**
@@ -86,16 +87,16 @@ Temporal Cloud para volume agregado dos 4 sistemas (~17M sagas/mês × 7 actions
 
 Achados das 6 baterias adicionaram **5 itens bloqueantes ou semi-bloqueantes** que não estavam na estimativa original:
 
-| Item | Origem | Custo |
-|---|---|---|
-| 9 itens originais (idempotência, observabilidade, resume, bus factor, lint, shape, etc.) | findings iniciais | ~10-15 dias |
-| Reconexão automática de workers | T1.4 (BLOQUEANTE) | +0.5 dia |
-| Wait-for-ack na compensação | T2.3 (BLOQUEANTE) | +1 dia |
-| Cobertura de caminhos de falha → status=FAILED | T2.2 | +3-5 dias |
-| Health-check de storage | T4.2 (BLOQUEANTE) | +1 dia |
-| Conceito de timeout de handler | T4.4 | +1 dia |
-| Deadlock de DB sob concorrência (WAL/busy_timeout) | T6.2 | +0.5 dia |
-| **Total revisado** | | **~17-23 dias eng inicial** |
+| Item                                                                                     | Origem            | Custo                       |
+| ---------------------------------------------------------------------------------------- | ----------------- | --------------------------- |
+| 9 itens originais (idempotência, observabilidade, resume, bus factor, lint, shape, etc.) | findings iniciais | ~10-15 dias                 |
+| Reconexão automática de workers                                                          | T1.4 (BLOQUEANTE) | +0.5 dia                    |
+| Wait-for-ack na compensação                                                              | T2.3 (BLOQUEANTE) | +1 dia                      |
+| Cobertura de caminhos de falha → status=FAILED                                           | T2.2              | +3-5 dias                   |
+| Health-check de storage                                                                  | T4.2 (BLOQUEANTE) | +1 dia                      |
+| Conceito de timeout de handler                                                           | T4.4              | +1 dia                      |
+| Deadlock de DB sob concorrência (WAL/busy_timeout)                                       | T6.2              | +0.5 dia                    |
+| **Total revisado**                                                                       |                   | **~17-23 dias eng inicial** |
 
 Mais manutenção recorrente, lint custom, code review centralizado, disciplina permanente em todos os 4 times.
 
@@ -103,13 +104,13 @@ Mais manutenção recorrente, lint custom, code review centralizado, disciplina 
 
 Achados das 6 baterias confirmaram capacidades nativas — nenhum item bloqueante adicional.
 
-| Item | Custo |
-|---|---|
-| Adoção: pacote interno `mobilestock/laravel-temporal-saga` (esconde RoadRunner + dialética) | ~5-7 dias inicial |
-| Lint PHPStan (proíbe `date()`, `rand()`, `PDO`, `Http::` em workflow code) | ~1-2 dias |
-| Treinamento + exemplos canônicos | ~2-3 dias + 1 semestre de calibração |
-| Operação inicial (Cloud) ou self-host EKS | $100-200/mês Cloud OU 15 dias eng + $250-500/mês infra |
-| **Total** | **~10 dias eng inicial + custo recorrente Cloud OU 25 dias eng + infra** |
+| Item                                                                                        | Custo                                                                    |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Adoção: pacote interno `mobilestock/laravel-temporal-saga` (esconde RoadRunner + dialética) | ~5-7 dias inicial                                                        |
+| Lint PHPStan (proíbe `date()`, `rand()`, `PDO`, `Http::` em workflow code)                  | ~1-2 dias                                                                |
+| Treinamento + exemplos canônicos                                                            | ~2-3 dias + 1 semestre de calibração                                     |
+| Operação inicial (Cloud) ou self-host EKS                                                   | $100-200/mês Cloud OU 15 dias eng + $250-500/mês infra                   |
+| **Total**                                                                                   | **~10 dias eng inicial + custo recorrente Cloud OU 25 dias eng + infra** |
 
 ---
 
@@ -132,18 +133,18 @@ PoC reaberta após decisão preliminar para validar definitivamente. Resultados 
 
 **Resumo de Tier 1-6 contra Step Functions/LocalStack:**
 
-| Critério | Resultado |
-|---|---|
-| LOC totais (sem bench) | ~440 (state-machine.json 119 + ActivityWorker + 2 workers + trigger + bootstrap) — entre RabbitMQ (632) e Temporal (237) |
-| Throughput burst (T1.3) | **10.9/s** — pior dos 3 (RabbitMQ 48/s, Temporal 28/s) |
-| Throughput sustentado (T3.3) | 7.5/s — pior dos 3 |
-| Latência p99 (T6.2) | **2092ms** — ~95x pior que RabbitMQ, ~6x pior que Temporal |
-| Versionamento (T1.1) | **Silent migration em LocalStack** — in-flight saga adotou nova ASL mid-execution. AWS real seria pinning (que tem outro problema: sagas em voo nunca recebem fixes). |
-| Falha de infra (T1.4) | LocalStack perdeu TODO o state. Em AWS real seria multi-AZ durável, mas no nosso teste não validamos. |
-| Compensação paralela (T2.3) | ❌ Catch chain inerentemente sequencial; paralelo exige `Type:Parallel` (rewrite ASL). |
-| Operação | ✅✅ **zero-ops em AWS real** — único critério onde Step Functions vence Temporal. |
-| Custo financeiro 12 meses | ~$51k/ano (volume agregado dos 4 sistemas × $0.025/1000 transições) — próximo do Temporal Cloud. |
-| Lock-in | ❌ profundo (AWS-only) |
+| Critério                     | Resultado                                                                                                                                                             |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LOC totais (sem bench)       | ~440 (state-machine.json 119 + ActivityWorker + 2 workers + trigger + bootstrap) — entre RabbitMQ (632) e Temporal (237)                                              |
+| Throughput burst (T1.3)      | **10.9/s** — pior dos 3 (RabbitMQ 48/s, Temporal 28/s)                                                                                                                |
+| Throughput sustentado (T3.3) | 7.5/s — pior dos 3                                                                                                                                                    |
+| Latência p99 (T6.2)          | **2092ms** — ~95x pior que RabbitMQ, ~6x pior que Temporal                                                                                                            |
+| Versionamento (T1.1)         | **Silent migration em LocalStack** — in-flight saga adotou nova ASL mid-execution. AWS real seria pinning (que tem outro problema: sagas em voo nunca recebem fixes). |
+| Falha de infra (T1.4)        | LocalStack perdeu TODO o state. Em AWS real seria multi-AZ durável, mas no nosso teste não validamos.                                                                 |
+| Compensação paralela (T2.3)  | ❌ Catch chain inerentemente sequencial; paralelo exige `Type:Parallel` (rewrite ASL).                                                                                |
+| Operação                     | ✅✅ **zero-ops em AWS real** — único critério onde Step Functions vence Temporal.                                                                                    |
+| Custo financeiro 12 meses    | ~$51k/ano (volume agregado dos 4 sistemas × $0.025/1000 transições) — próximo do Temporal Cloud.                                                                      |
+| Lock-in                      | ❌ profundo (AWS-only)                                                                                                                                                |
 
 **Conclusão da 3ª PoC:** Step Functions é viável tecnicamente, atrativo operacionalmente, mas **não vence Temporal em nenhum dos critérios qualitativos críticos** (correção, latência, lock-in). O argumento "zero-ops" é forte, mas não compensa o lock-in profundo + custo de transição (cada step = transição cobrada) + latência maior.
 
@@ -153,7 +154,7 @@ PoC reaberta após decisão preliminar para validar definitivamente. Resultados 
 
 ## 5. Resposta à pergunta-chave do tech lead
 
-A pergunta de [`consideracoes.md`](./consideracoes.md) §9 era: *"Com que frequência você espera mudar a forma de uma saga vs mudar regras de negócio dentro dos passos?"*
+A pergunta de [`consideracoes.md`](./consideracoes.md) §9 era: _"Com que frequência você espera mudar a forma de uma saga vs mudar regras de negócio dentro dos passos?"_
 
 **Implicações concretas das respostas possíveis:**
 
@@ -162,6 +163,7 @@ A pergunta de [`consideracoes.md`](./consideracoes.md) §9 era: *"Com que frequ�
 - **Se "não sabemos ainda":** padrão organizacional precisa ser **defensivo** — assumir que mudanças vão acontecer e que algum dev vai esquecer de bumpar `saga_version`. Temporal compra essa garantia automaticamente.
 
 A resposta também calibra **timeline de adoção**:
+
 - 4 sistemas × times independentes × deploys ao longo de anos = probabilidade cumulativa alta de incidentes T5.1 mesmo se "raros".
 - Se cada incidente custa um postmortem + correção manual + comunicação com cliente, o custo cumulativo provavelmente ultrapassa os 7-13 dias de "economia inicial" do RabbitMQ em poucos meses.
 

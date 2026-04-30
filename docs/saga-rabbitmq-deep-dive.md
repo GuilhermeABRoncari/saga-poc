@@ -12,12 +12,12 @@ O RabbitMQ implementa o protocolo AMQP 0-9-1. Estes são os building blocks:
 
 Entidade onde mensagens são publicadas. Roteia para filas usando regras (bindings). Tipos:
 
-| Tipo | Comportamento | Exemplo |
-|------|---------------|---------|
-| `direct` | Routing key exata (1:1) | `routing_key=orders` → fila `orders` |
-| `fanout` | Broadcast para todas as filas vinculadas | Notificações multi-consumer |
-| `topic` | Routing key com wildcards | `*.log`, `#.error` |
-| `headers` | Roteamento por headers da mensagem | Content-based routing |
+| Tipo      | Comportamento                            | Exemplo                              |
+| --------- | ---------------------------------------- | ------------------------------------ |
+| `direct`  | Routing key exata (1:1)                  | `routing_key=orders` → fila `orders` |
+| `fanout`  | Broadcast para todas as filas vinculadas | Notificações multi-consumer          |
+| `topic`   | Routing key com wildcards                | `*.log`, `#.error`                   |
+| `headers` | Roteamento por headers da mensagem       | Content-based routing                |
 
 O **default exchange** (`''`) é um direct implícito que roteia pelo nome da fila — **é o que a PoC usa**.
 
@@ -65,11 +65,11 @@ App  ──TCP──  RabbitMQ
 
 Confirmação de processamento:
 
-| Método | Descrição |
-|--------|-----------|
-| `basic.ack` | Positiva — broker remove a mensagem |
-| `basic.nack` | Rejeição com opção de requeue (extensão RabbitMQ, suporta múltiplas) |
-| `basic.reject` | Rejeição simples (AMQP padrão, 1 por vez) |
+| Método         | Descrição                                                            |
+| -------------- | -------------------------------------------------------------------- |
+| `basic.ack`    | Positiva — broker remove a mensagem                                  |
+| `basic.nack`   | Rejeição com opção de requeue (extensão RabbitMQ, suporta múltiplas) |
+| `basic.reject` | Rejeição simples (AMQP padrão, 1 por vez)                            |
 
 - **Delivery tag**: ID monotonicamente crescente por canal.
 - Sem ack + conexão cai → mensagem volta pra fila automaticamente (flag `redeliver=true`).
@@ -102,11 +102,11 @@ Confirmação de processamento:
 
 ### Combinações de durabilidade
 
-| Fila | Mensagem | Sobrevive reinício? |
-|------|----------|---------------------|
-| durable | persistent (mode 2) | ✅ Sim |
-| durable | transient (mode 1) | ❌ Mensagem perdida |
-| transient | qualquer | ❌ Tudo perdido |
+| Fila      | Mensagem            | Sobrevive reinício? |
+| --------- | ------------------- | ------------------- |
+| durable   | persistent (mode 2) | ✅ Sim              |
+| durable   | transient (mode 1)  | ❌ Mensagem perdida |
+| transient | qualquer            | ❌ Tudo perdido     |
 
 ---
 
@@ -153,21 +153,21 @@ Producer                    RabbitMQ                     Consumer
 
 ### Portas
 
-| Porta | Protocolo | Uso |
-|-------|-----------|-----|
-| 5672 | AMQP | Protocolo principal de mensageria |
-| 15672 | HTTP | Management UI + REST API |
-| 25672 | Erlang | Inter-node (clustering) |
-| 4369 | EPMD | Erlang Port Mapper Daemon |
-| 5671 | AMQPS | AMQP + TLS |
+| Porta | Protocolo | Uso                               |
+| ----- | --------- | --------------------------------- |
+| 5672  | AMQP      | Protocolo principal de mensageria |
+| 15672 | HTTP      | Management UI + REST API          |
+| 25672 | Erlang    | Inter-node (clustering)           |
+| 4369  | EPMD      | Erlang Port Mapper Daemon         |
+| 5671  | AMQPS     | AMQP + TLS                        |
 
 ### ENV vars
 
-| Variável | Descrição |
-|----------|-----------|
-| `RABBITMQ_DEFAULT_USER` | Usuário admin criado no 1o boot |
-| `RABBITMQ_DEFAULT_PASS` | Senha do admin |
-| `RABBITMQ_DEFAULT_VHOST` | Virtual host padrão |
+| Variável                 | Descrição                                        |
+| ------------------------ | ------------------------------------------------ |
+| `RABBITMQ_DEFAULT_USER`  | Usuário admin criado no 1o boot                  |
+| `RABBITMQ_DEFAULT_PASS`  | Senha do admin                                   |
+| `RABBITMQ_DEFAULT_VHOST` | Virtual host padrão                              |
 | `RABBITMQ_ERLANG_COOKIE` | Cookie para clustering (nodes devem ter o mesmo) |
 
 ### Volumes (produção)
@@ -197,15 +197,15 @@ Implementação **PHP pura** do protocolo AMQP 0-9-1. Não requer extensão PECL
 
 ### Classes principais
 
-| Classe/Método | Função |
-|---------------|--------|
-| `AMQPStreamConnection` | Conexão TCP via PHP streams |
-| `AMQPMessage` | Payload + propriedades da mensagem |
-| `$channel->queue_declare()` | Declara fila (idempotente) |
-| `$channel->basic_publish()` | Publica mensagem |
-| `$channel->basic_consume()` | Registra consumer callback |
-| `$channel->basic_qos()` | Controle de prefetch |
-| `$channel->wait()` | Blocking wait por mensagens |
+| Classe/Método               | Função                             |
+| --------------------------- | ---------------------------------- |
+| `AMQPStreamConnection`      | Conexão TCP via PHP streams        |
+| `AMQPMessage`               | Payload + propriedades da mensagem |
+| `$channel->queue_declare()` | Declara fila (idempotente)         |
+| `$channel->basic_publish()` | Publica mensagem                   |
+| `$channel->basic_consume()` | Registra consumer callback         |
+| `$channel->basic_qos()`     | Controle de prefetch               |
+| `$channel->wait()`          | Blocking wait por mensagens        |
 
 ### Atrito de build
 
@@ -216,6 +216,7 @@ Em imagens Alpine PHP, compilar `ext-sockets` exige `linux-headers` e `pdo_sqlit
 ## 6. Links de referência
 
 ### AMQP e RabbitMQ
+
 - Conceitos AMQP 0-9-1: https://www.rabbitmq.com/tutorials/amqp-concepts
 - Tutorial Hello World PHP: https://www.rabbitmq.com/tutorials/tutorial-one-php
 - Tutorial Work Queues: https://www.rabbitmq.com/tutorials/tutorial-two-php
@@ -226,10 +227,12 @@ Em imagens Alpine PHP, compilar `ext-sockets` exige `linux-headers` e `pdo_sqlit
 - Docker image: https://hub.docker.com/_/rabbitmq
 
 ### php-amqplib
+
 - GitHub: https://github.com/php-amqplib/php-amqplib
 - Packagist: https://packagist.org/packages/php-amqplib/php-amqplib
 
 ### SAGA Pattern (teoria)
+
 - Paper original (Garcia-Molina, 1987): https://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf
 - Microservices Patterns (Chris Richardson): https://microservices.io/patterns/data/saga.html
 - Orchestration vs Choreography: https://microservices.io/patterns/data/saga.html#example-orchestration-based-saga
@@ -238,14 +241,14 @@ Em imagens Alpine PHP, compilar `ext-sockets` exige `linux-headers` e `pdo_sqlit
 
 ## 7. O que falta para produção (vs a PoC atual)
 
-| Aspecto | PoC | Produção |
-|---------|-----|----------|
-| Estado da saga | SQLite local em volume Docker | Tabela `saga_state` em RDBMS replicado |
-| Publicação | Fire-and-forget | Transactional outbox pattern |
-| Recebimento | Sem confirm | Publisher confirms |
-| Falhas | Exceção → compensação imediata | DLX + retry queue com backoff |
-| Idempotência | Nenhuma (handlers fake) | Unique constraint / dedup por step |
-| Rastreamento | Logs `echo` por linha | Correlation ID distribuído + structured logs |
-| HA | Single-node classic queue | Quorum Queues (3+ nodes) |
-| Monitoramento | Management UI | Prometheus + Grafana + alertas |
-| Compensações que falham | Mensagem `nack` (volta pra fila) | DLX + alerta crítico (operador humano) |
+| Aspecto                 | PoC                              | Produção                                     |
+| ----------------------- | -------------------------------- | -------------------------------------------- |
+| Estado da saga          | SQLite local em volume Docker    | Tabela `saga_state` em RDBMS replicado       |
+| Publicação              | Fire-and-forget                  | Transactional outbox pattern                 |
+| Recebimento             | Sem confirm                      | Publisher confirms                           |
+| Falhas                  | Exceção → compensação imediata   | DLX + retry queue com backoff                |
+| Idempotência            | Nenhuma (handlers fake)          | Unique constraint / dedup por step           |
+| Rastreamento            | Logs `echo` por linha            | Correlation ID distribuído + structured logs |
+| HA                      | Single-node classic queue        | Quorum Queues (3+ nodes)                     |
+| Monitoramento           | Management UI                    | Prometheus + Grafana + alertas               |
+| Compensações que falham | Mensagem `nack` (volta pra fila) | DLX + alerta crítico (operador humano)       |

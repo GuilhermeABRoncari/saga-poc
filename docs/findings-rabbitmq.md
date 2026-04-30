@@ -8,15 +8,15 @@ PoC vivo: [`../saga-rabbitmq/`](../saga-rabbitmq/).
 
 ## 1. Esforço até happy path
 
-| Métrica | Valor |
-|---|---|
-| Sessão de implementação | 1 (∼2h, contando bugs) |
-| LOC totais | 632 (PHP em `src/` + `bin/`) |
-| LOC da lib `mobilestock/saga` | 381 (6 arquivos) |
-| LOC da saga + handlers de aplicação | 111 (6 arquivos) |
-| LOC de bootstrap (`bin/`) | 140 |
-| Composer deps | 3 (`php-amqplib`, `ramsey/uuid`, `monolog`) |
-| Containers Docker | 4 (rabbitmq + orchestrator + 2 services) |
+| Métrica                             | Valor                                       |
+| ----------------------------------- | ------------------------------------------- |
+| Sessão de implementação             | 1 (∼2h, contando bugs)                      |
+| LOC totais                          | 632 (PHP em `src/` + `bin/`)                |
+| LOC da lib `mobilestock/saga`       | 381 (6 arquivos)                            |
+| LOC da saga + handlers de aplicação | 111 (6 arquivos)                            |
+| LOC de bootstrap (`bin/`)           | 140                                         |
+| Composer deps                       | 3 (`php-amqplib`, `ramsey/uuid`, `monolog`) |
+| Containers Docker                   | 4 (rabbitmq + orchestrator + 2 services)    |
 
 **Bugs encontrados durante o build (custos reais):**
 
@@ -26,18 +26,18 @@ PoC vivo: [`../saga-rabbitmq/`](../saga-rabbitmq/).
 4. Composer install no Alpine quebra sem `linux-headers` (sockets) e `sqlite-dev` (pdo_sqlite).
 5. Gitignore `storage/*.sqlite` é ancorado à raiz; arquivos em subdiretórios escaparam. Fix: `**/storage/*.sqlite`.
 
-**Observação:** os bugs 1 e 2 são *bugs de ergonomia da lib* — precisam ficar resolvidos no pacote interno antes de ser oferecido a outros times.
+**Observação:** os bugs 1 e 2 são _bugs de ergonomia da lib_ — precisam ficar resolvidos no pacote interno antes de ser oferecido a outros times.
 
 ---
 
 ## 2. Esforço de compensação completa
 
-| Métrica | Valor |
-|---|---|
-| LOC dedicadas a compensação na lib | ~25 (`SagaOrchestrator::compensate` + handler de comandos de compensação) |
-| LOC de handlers de compensação | ~30 (release_stock, refund_credit) |
-| Tempo adicional para implementar compensação após happy path | irrelevante — feito no mesmo ciclo |
-| Padrão LIFO automático | ✅ implementado na lib |
+| Métrica                                                      | Valor                                                                     |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| LOC dedicadas a compensação na lib                           | ~25 (`SagaOrchestrator::compensate` + handler de comandos de compensação) |
+| LOC de handlers de compensação                               | ~30 (release_stock, refund_credit)                                        |
+| Tempo adicional para implementar compensação após happy path | irrelevante — feito no mesmo ciclo                                        |
+| Padrão LIFO automático                                       | ✅ implementado na lib                                                    |
 
 Compensação **funcionou** ponta a ponta com `FORCE_FAIL=step3`: orchestrator detectou falha, disparou `refund_credit` (step 1) → `release_stock` (step 0) com IDs propagados corretamente.
 
@@ -67,15 +67,15 @@ Compensação **funcionou** ponta a ponta com `FORCE_FAIL=step3`: orchestrator d
 
 Para chegar a "mínimo aceitável" (timeline básica + alerta de compensação falha + dashboard de sagas em andamento), estimo:
 
-| Componente | Esforço estimado |
-|---|---|
-| Logs estruturados (JSON) com `saga_id` em todos os containers | 2-3 horas |
-| Stack de logs (Loki ou ELK), pelo menos local | 1 dia (1ª vez), depois reuso |
-| Métricas Prometheus expostas pela lib (counters de saga.started/completed/compensated) | 4-6 horas |
-| Dashboard Grafana padrão (sagas/min, % compensadas, p95 duração) | 1 dia |
-| DLX nas filas de comando + alerta CRÍTICO em "DLX recebeu mensagem" | 4-6 horas |
-| Tabela `saga_events` com history append-only (vs só snapshot) para replay grosso | 1-2 dias |
-| **Total estimado** | **3-5 dias engenheiro** |
+| Componente                                                                             | Esforço estimado             |
+| -------------------------------------------------------------------------------------- | ---------------------------- |
+| Logs estruturados (JSON) com `saga_id` em todos os containers                          | 2-3 horas                    |
+| Stack de logs (Loki ou ELK), pelo menos local                                          | 1 dia (1ª vez), depois reuso |
+| Métricas Prometheus expostas pela lib (counters de saga.started/completed/compensated) | 4-6 horas                    |
+| Dashboard Grafana padrão (sagas/min, % compensadas, p95 duração)                       | 1 dia                        |
+| DLX nas filas de comando + alerta CRÍTICO em "DLX recebeu mensagem"                    | 4-6 horas                    |
+| Tabela `saga_events` com history append-only (vs só snapshot) para replay grosso       | 1-2 dias                     |
+| **Total estimado**                                                                     | **3-5 dias engenheiro**      |
 
 Esse esforço é "uma vez" — depois replicado entre projetos. Mas precisa ser mantido.
 
@@ -134,6 +134,7 @@ SagaOrchestrator::onEvent() {
 ```
 
 Se o orchestrator morrer entre (1) e (2), ou entre (2) e (3):
+
 - A mensagem em `saga.events` é requeued porque não foi ackada.
 - No restart, `onEvent` roda de novo:
   - `repo->advance` empurra **mais uma entrada** em `completed_steps[]` (duplicada).
@@ -141,6 +142,7 @@ Se o orchestrator morrer entre (1) e (2), ou entre (2) e (3):
 - Service handler executa **duas vezes** se não for idempotente. Em produção: pagamento dobrado, estoque reservado duas vezes, OAuth client criado em duplicidade.
 
 **Mitigações conhecidas:**
+
 - Tornar todo handler idempotente por construção (checkar antes de agir).
 - Mudar o orchestrator para "transactional outbox": escrita do estado e publicação numa só transação local, com worker separado fazendo o fan-out.
 - Mudar o ack para acontecer ANTES da publicação do próximo comando (mas isso troca o problema: agora se o publish falhar, perdemos o avanço da saga).
@@ -175,13 +177,13 @@ Em produção, operação do RabbitMQ é trabalho dedicado. Não trivial, mas co
 
 ## 8. Custo projetado 12 meses
 
-| Item | RabbitMQ self-hosted | Temporal Cloud (estimativa) |
-|---|---|---|
-| Infra | 3 nodes c/ RAM/CPU dedicados (~$200-400/mês AWS) | $100-200/mês (Essentials/Growth) |
-| Engenharia para construir lib + observabilidade | 3-5 dias inicial + manutenção recorrente | 0 (lib do Temporal já existe; só RoadRunner setup) |
-| Engenharia para operar | 1 dia/mês (médio, monitoring + DLX) | 0 (Cloud) ou ~1 dia/mês (self-hosted EKS) |
-| Risco de outage por bug nosso na lib | médio-alto (código novo) | baixo (Temporal core) |
-| **Comparação justa só vai ser feita após PoC do Temporal** | | |
+| Item                                                       | RabbitMQ self-hosted                             | Temporal Cloud (estimativa)                        |
+| ---------------------------------------------------------- | ------------------------------------------------ | -------------------------------------------------- |
+| Infra                                                      | 3 nodes c/ RAM/CPU dedicados (~$200-400/mês AWS) | $100-200/mês (Essentials/Growth)                   |
+| Engenharia para construir lib + observabilidade            | 3-5 dias inicial + manutenção recorrente         | 0 (lib do Temporal já existe; só RoadRunner setup) |
+| Engenharia para operar                                     | 1 dia/mês (médio, monitoring + DLX)              | 0 (Cloud) ou ~1 dia/mês (self-hosted EKS)          |
+| Risco de outage por bug nosso na lib                       | médio-alto (código novo)                         | baixo (Temporal core)                              |
+| **Comparação justa só vai ser feita após PoC do Temporal** |                                                  |                                                    |
 
 ---
 
