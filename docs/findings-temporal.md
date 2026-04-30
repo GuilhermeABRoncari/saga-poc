@@ -27,7 +27,7 @@ PoC vivo: [`../saga-temporal/`](../saga-temporal/).
 
 1. **PECL `grpc` compile falha sem `zlib-dev`** no Alpine — header `zconf.h` ausente. `linux-headers` também é necessário.
 2. **`apk del $PHPIZE_DEPS` removeu `libstdc++`** junto, e `grpc.so` (extensão C++) precisa dela em runtime. Fix: adicionar `apk add --no-cache libstdc++ zlib` num RUN separado depois do compile.
-3. **Race condition na inicialização**: workers tentaram conectar ao Temporal antes do server estar pronto, morreram com `connection refused`. Sem `healthcheck` no temporal-server (auto-setup), `depends_on` não espera. Workaround atual: re-rodar `docker compose up -d` quando o server está saudável; correto seria adicionar healthcheck que ping no gRPC.
+3. **Race condition na inicialização**: workers tentaram conectar ao Temporal antes do server estar pronto, morreram com `connection refused`. Sem `healthcheck` no temporal-server (auto-setup), `depends_on` não espera. **Resolvido em 2026-04-30** adicionando `healthcheck` no service `temporal` com `tctl --address temporal:7233 cluster health` (start_period 20s, 30 retries) e mudando `depends_on` dos workers/alerter para `condition: service_healthy`. Sobe limpo no primeiro `docker compose up -d`.
 4. **Versão de RoadRunner**: `temporal/sdk` v2.17 sugere RoadRunner 2025.1.5+. Funciona com 2024.3.5 mas com warning. Acoplamento SDK ↔ runtime é real.
 5. **Import `ActivityProxy`**: tipo precisa vir de `Temporal\Internal\Workflow\ActivityProxy` — namespace `Internal` é "API privada" da SDK. Atrito de DX (e potencial breaking change futura sem aviso).
 
@@ -179,15 +179,15 @@ Empate qualitativo. Temporal vence em primeira leitura, RabbitMQ vence em "como 
 
 ## 7. Operação simulada
 
-| Aspecto                | Observação                                                                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- |
-| Setup local            | `docker compose up --build -d` no primeiro run leva ~25 min (PECL grpc compile)                         |
-| Containers em produção | Temporal: 4 serviços (Frontend/History/Matching/Worker) + Postgres + opcional Elasticsearch             |
-| Cloud option           | Temporal Cloud Free → Essentials ($100/mês) → Growth ($200/mês) → custo escala com actions              |
-| Self-host EKS          | Helm chart oficial + Aurora (managed Postgres) + opcional OpenSearch                                    |
-| Self-host Swarm        | **Não suportado oficialmente** — viável só Cloud em ambiente Swarm                                      |
-| Healthcheck            | Workers precisam aguardar Temporal server estar pronto (vimos race condition); precisa healthcheck gRPC |
-| Logs                   | Pelo SDK PHP, via stdout do worker — fácil de integrar com qualquer log aggregator                      |
+| Aspecto                | Observação                                                                                                             |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Setup local            | `docker compose up --build -d` no primeiro run leva ~25 min (PECL grpc compile)                                        |
+| Containers em produção | Temporal: 4 serviços (Frontend/History/Matching/Worker) + Postgres + opcional Elasticsearch                            |
+| Cloud option           | Temporal Cloud Free → Essentials ($100/mês) → Growth ($200/mês) → custo escala com actions                             |
+| Self-host EKS          | Helm chart oficial + Aurora (managed Postgres) + opcional OpenSearch                                                   |
+| Self-host Swarm        | **Não suportado oficialmente** — viável só Cloud em ambiente Swarm                                                     |
+| Healthcheck            | Resolvido com `tctl cluster health` no service temporal + `depends_on: condition: service_healthy` nos workers/alerter |
+| Logs                   | Pelo SDK PHP, via stdout do worker — fácil de integrar com qualquer log aggregator                                     |
 
 ---
 

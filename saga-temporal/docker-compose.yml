@@ -23,6 +23,12 @@ services:
       POSTGRES_SEEDS: postgresql
     ports:
       - "7233:7233"
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
 
   temporal-ui:
     image: temporalio/ui:2.35.0
@@ -37,7 +43,8 @@ services:
   workflow-worker:
     build: .
     depends_on:
-      - temporal
+      temporal:
+        condition: service_healthy
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       WORKER_SCRIPT: workflow-worker.php
@@ -46,7 +53,8 @@ services:
   service-a-worker:
     build: .
     depends_on:
-      - temporal
+      temporal:
+        condition: service_healthy
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       WORKER_SCRIPT: service-a-worker.php
@@ -58,7 +66,8 @@ services:
   service-b-worker:
     build: .
     depends_on:
-      - temporal
+      temporal:
+        condition: service_healthy
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       WORKER_SCRIPT: service-b-worker.php
@@ -69,7 +78,8 @@ services:
   alerter:
     build: .
     depends_on:
-      - temporal
+      temporal:
+        condition: service_healthy
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       ALERT_LOG: /app/storage/alerts.log

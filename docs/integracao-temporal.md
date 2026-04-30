@@ -60,6 +60,12 @@ services:
       POSTGRES_USER: temporal
       POSTGRES_PWD: temporal
     ports: ["7233:7233"]
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
 
   temporal-ui:
     image: temporalio/ui:2.35.0
@@ -70,6 +76,8 @@ services:
 volumes:
   temporal-pg:
 ```
+
+> **Importante**: o healthcheck no service `temporal` é necessário porque a imagem `temporalio/auto-setup` leva ~10-15s para inicializar (cria namespace `default`, sobe os 4 serviços internos). Sem ele, workers que usam `depends_on: temporal` partem antes do gRPC estar respondendo e morrem com `connection refused`. Os services de worker (Fase 3) devem usar `depends_on: temporal: condition: service_healthy` — bug encontrado durante o PoC e documentado em `findings-temporal.md` §1.3.
 
 Validação: `docker compose up temporal` + `tctl --address localhost:7233 namespace list` deve retornar `default`.
 
