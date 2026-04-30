@@ -12,6 +12,7 @@ services:
 
   service-a:
     build: .
+    restart: unless-stopped
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -20,7 +21,7 @@ services:
       AMQP_PORT: 5672
       AMQP_USER: guest
       AMQP_PASS: guest
-      COMPENSATION_DB: /app/storage/service-a.sqlite
+      SAGA_DB: /app/storage/service-a.sqlite
       FORCE_FAIL: ${FORCE_FAIL:-}
       SLOW_RESERVE_STOCK: ${SLOW_RESERVE_STOCK:-0}
       SLOW_COMPENSATION: ${SLOW_COMPENSATION:-0}
@@ -30,6 +31,7 @@ services:
 
   service-b:
     build: .
+    restart: unless-stopped
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -38,7 +40,7 @@ services:
       AMQP_PORT: 5672
       AMQP_USER: guest
       AMQP_PASS: guest
-      COMPENSATION_DB: /app/storage/service-b.sqlite
+      SAGA_DB: /app/storage/service-b.sqlite
       FORCE_FAIL: ${FORCE_FAIL:-}
       FAIL_COMPENSATION: ${FAIL_COMPENSATION:-}
       SLOW_COMPENSATION: ${SLOW_COMPENSATION:-0}

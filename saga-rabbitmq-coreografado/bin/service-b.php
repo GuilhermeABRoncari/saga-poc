@@ -6,9 +6,9 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use App\Handlers\ServiceB\ChargeCreditHandler;
 use App\Handlers\ServiceB\RefundCreditCompensation;
-use Mobilestock\SagaCoreografada\CompensationLog;
 use Mobilestock\SagaCoreografada\EventBus;
 use Mobilestock\SagaCoreografada\SagaListener;
+use Mobilestock\SagaCoreografada\SagaLog;
 
 $bus = new EventBus(
     host: $_ENV['AMQP_HOST'] ?? 'localhost',
@@ -17,7 +17,7 @@ $bus = new EventBus(
     pass: $_ENV['AMQP_PASS'] ?? 'guest',
 );
 
-$log = new CompensationLog($_ENV['COMPENSATION_DB'] ?? __DIR__ . '/../storage/service-b.sqlite');
+$log = new SagaLog($_ENV['SAGA_DB'] ?? __DIR__ . '/../storage/service-b.sqlite');
 
 (new SagaListener('service-b', $bus, $log))
     ->react('stock.reserved', 'charge_credit', 'credit.charged', new ChargeCreditHandler())

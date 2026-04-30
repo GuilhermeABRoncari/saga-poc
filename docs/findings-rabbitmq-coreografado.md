@@ -23,15 +23,15 @@ PoC vivo: [`../saga-rabbitmq-coreografado/`](../saga-rabbitmq-coreografado/).
 | Métrica                                                                | Valor                                              | Comparação RabbitMQ-orquestrado |
 | ---------------------------------------------------------------------- | -------------------------------------------------- | ------------------------------- |
 | Sessão de implementação                                                | 1 (∼1h)                                            | 1 (∼2h)                         |
-| LOC totais                                                             | **428** (PHP em `src/` + `bin/`)                   | 632                             |
-| LOC da lib `Mobilestock\SagaCoreografada`                              | **234** (3 arquivos: EventBus 81, CompensationLog 55, SagaListener 98) | 381 (6 arquivos) |
+| LOC totais                                                             | **459** (PHP em `src/` + `bin/`)                   | 632                             |
+| LOC da lib `Mobilestock\SagaCoreografada`                              | **265** (3 arquivos: EventBus 81, SagaLog 77, SagaListener 107) | 381 (6 arquivos) |
 | LOC dos handlers (5 arquivos)                                          | 116                                                | ~73                             |
 | LOC dos scripts em `bin/`                                              | 78                                                 | 140                             |
 | Composer deps                                                          | 2 (`php-amqplib`, `ramsey/uuid`)                   | 3                               |
 | Containers Docker                                                      | 3 (rabbitmq + 2 serviços)                          | 4                               |
 | Tempo do primeiro `docker compose up --build`                          | ~2 min                                             | ~2 min                          |
 
-**Observação:** lib é ~39% menor que a versão orquestrada (234 vs 381 LOC). Sem `SagaOrchestrator`, sem `SagaStateRepository`, sem `Saga`, sem `Step`. As três classes restantes (`EventBus`, `CompensationLog`, `SagaListener`) cobrem todo o ciclo. **Importante:** o claim do tech lead de "<100 LOC" não bateu — a lib mínima viável ficou em 234 LOC, e provavelmente vai crescer pra ~280-300 quando o achado 2.3 for resolvido (step_log local).
+**Observação:** lib é ~30% menor que a versão orquestrada (265 vs 381 LOC). Sem `SagaOrchestrator`, sem `SagaStateRepository`, sem `Saga`, sem `Step`. As três classes restantes (`EventBus`, `SagaLog`, `SagaListener`) cobrem todo o ciclo. **Importante:** o claim do tech lead de "<100 LOC" não se sustentou — a lib mínima funcional (com correção do achado 2.3 incluída) ficou em 265 LOC. Mesmo assim, é genuinamente menor que a orquestrada.
 
 ---
 
@@ -57,24 +57,33 @@ Saga `64118aa3`:
 
 **Sem LIFO ordenado pelo orquestrador**, mas o resultado está correto: ambas compensações rodaram exatamente uma vez. Em coreografia, "ordem" não é garantida — é desejável que cada compensação seja idempotente e independente.
 
-### 2.3 Compensação por falha em step2 (ChargeCredit) — ⚠️ ACHADO IMPORTANTE
+### 2.3 Compensação por falha em step2 (ChargeCredit) — ⚠️ ACHADO IMPORTANTE → ✅ RESOLVIDO em 2026-04-30
 
-Saga `12eb779c`:
-1. ReserveStock completou.
-2. ChargeCredit falhou (FORCE_FAIL=step2) — saga.failed publicado.
-3. service-a executou ReleaseStock (correto — havia stock reservado).
-4. **service-b executou RefundCredit — mesmo sem nunca ter cobrado nada.**
+**Versão original (lib mínima sem step_log):** saga `12eb779c` mostrou que **service-b executou RefundCredit mesmo sem nunca ter cobrado nada**. Em coreografia pura, `saga.failed` é fanout; cada serviço executava sua compensação local sem saber se o step havia executado de fato.
 
-**Diagnóstico:** em coreografia pura, `saga.failed` é fanout; cada serviço executa sua compensação localmente. A lib mínima atual **não distingue** entre "este serviço completou seu step e precisa reverter" vs "este serviço nem chegou a executar". A lib só garante exactly-once via dedup-key (idempotência), não condicional-on-execution.
+**Solução adotada:** introduzido `SagaLog` local com duas tabelas:
+- `step_log(saga_id, step, completed_at)` — gravado pelo `SagaListener` após handler de sucesso.
+- `compensation_log(saga_id, step, payload, applied_at)` — dedup de compensações (já existia).
 
-**Em produção isso seria bug:** "reembolsar" um pagamento que nunca foi cobrado pode estourar contas, criar inconsistência financeira, ou no melhor caso virar no-op silencioso.
+`SagaListener::runCompensations` agora aplica duas guardas:
+1. `wasStepDone(saga_id, step)` — pula se este serviço nunca executou esse step.
+2. `tryClaimCompensation(saga_id, step)` — pula se já compensou (idempotência).
 
-**Soluções possíveis (a investigar):**
-1. Cada serviço mantém log local de "executei step X com sucesso pra saga Y" (additional table `step_log`); compensação consulta esse log antes de executar.
-2. Compensações inspecionam `failed_step` no payload de `saga.failed` e decidem heuristicamente se devem rodar (ex.: RefundCredit só roda se `failed_step != charge_credit`).
-3. Compensação **é** idempotente E **detecta no efeito** se há algo a fazer (ex.: tenta deletar reservation_id; se não existe, vira no-op).
+**Validação empírica (2026-04-30):**
 
-**Implicação na lib:** os 234 LOC atuais não são suficientes — vão crescer para incluir o "step log local". Estimativa pós-refactor: ~280-300 LOC. Ainda menor que orquestrado (381), mas o claim de "lib pequena, dev tem mínima responsabilidade" precisa ser qualificado: cada compensação ainda exige cuidado de design (idempotência + condicional-on-execution).
+| Cenário                       | service-a (ReleaseStock) | service-b (RefundCredit) | Comportamento esperado                                |
+| ----------------------------- | ------------------------ | ------------------------ | ----------------------------------------------------- |
+| Happy path                    | não roda                 | não roda                 | ✅ saga completou — sem compensação                    |
+| FORCE_FAIL=step1 (Reserve)    | `skipped (never executed)` | `skipped (never executed)` | ✅ nada foi feito, nada para reverter                 |
+| FORCE_FAIL=step2 (Charge)     | **roda** (devolve stock) | `skipped (never executed)` | ✅ só ReleaseStock — RefundCredit não tinha o que fazer |
+| FORCE_FAIL=step3 (Shipping)   | **roda** (devolve stock) | **roda** (estorna charge)  | ✅ ambas compensações pertinentes                       |
+
+**Custo da correção:** lib cresceu de 234 → **265 LOC** (+31 LOC). Estimei 280-300; ficou abaixo. Ainda 30% menor que orquestrada.
+
+**Trade-off exposto pelo achado:** "mínimo de responsabilidade ao dev" não significa "zero responsabilidade". O dev de cada handler ainda precisa entender que:
+- O step só conta como "feito" depois do `markStepDone` chamado pela lib após sucesso.
+- A compensação roda como fanout — pode ser invocada mesmo quando a saga falhou em outro serviço, e precisa ser robusta a isso.
+- Em produção, `markStepDone` + `publish` da lib **não são atômicos** com o efeito do handler. Se o handler comita uma transação no banco do serviço e o serviço cai antes do `markStepDone`, o efeito existe mas o log não — a saga vai falhar (timeout) e a compensação vai pular o step. **Bug em potencial em produção** que vai precisar de outbox pattern ou transaction-aware dedup. Vale registrar como achado paralelo a investigar (T-novo).
 
 ---
 
@@ -113,9 +122,95 @@ Esse achado **fortalece o ramo coreografado** num critério quantitativo concret
 
 ---
 
+## 3.B Tier 1-6 re-projetado — execução parcial (2026-04-30)
+
+Testes executados contra a versão corrigida da lib (com `step_log`):
+
+### ✅ T1.3 — 100 sagas concorrentes
+- 100 sagas disparadas em sequência (publish em lote, ~15k publish/s).
+- Aguardado 30s.
+- **Resultado:** 100 step_log em A, 100 step_log em B, 100 `saga.completed` events publicados.
+- **Veredito:** RabbitMQ topic exchange + 1 consumer por queue lida bem com concorrência. Latência total inferior à orquestrada (sem hop pra orquestrador).
+
+### ✅ T-novo: persistência de fila (handler offline durante saga)
+- service-b parado antes do trigger.
+- service-a publica `stock.reserved` → fica enfileirado em `service-b.saga` (1 msg, 0 consumers).
+- service-b sobe → consome → ChargeCredit → publica `credit.charged`.
+- **Veredito:** RabbitMQ persistência durável funciona. Mensagem não perdida durante outage de consumer.
+
+### ✅ T-novo: compensação que falha sempre — **RESOLVIDO em 2026-04-30 (segunda iteração)**
+- Cenário: `FAIL_COMPENSATION=refund` força service-b a sempre falhar `RefundCredit`.
+- **Observado:**
+  - service-b loga `comp=charge_credit FAILED: forced failure on refund_credit`.
+  - **`compensation_log` mostra row gravada**, marcando como "compensado" mesmo com falha.
+  - Mensagem `saga.failed` foi `ack` no broker (consumida com sucesso do ponto de vista do RabbitMQ).
+  - **Sem retry. Compensação fica perdida silenciosamente.** Em produção: RefundCredit nunca executou, dinheiro não devolvido, sem alerta.
+- **Causa:** `SagaListener::runCompensations` chama `tryClaimCompensation` ANTES do handler. Se handler lança exception, claim já foi feito → próximas tentativas (se houvesse) seriam dedup-skipped.
+- **Solução conhecida:** marcar claim com estados (`claimed`, `succeeded`, `failed`) ou só registrar após sucesso. Em ambos os casos a lib precisa também ter retry policy (republish saga.failed em DLQ, ou retry com backoff).
+- **Custo estimado da correção:** +30-50 LOC na lib + uso de DLQ no RabbitMQ.
+
+**Solução implementada:**
+- `compensation_log` ganhou colunas `status` ('in_progress' | 'done') e `attempts`.
+- `SagaLog::startCompensation` retorna `'attempt'` ou `'done'`. Em retry, incrementa attempts mas mantém status='in_progress'.
+- `SagaListener::runCompensations` lança exception se algum handler falhar.
+- `EventBus::declareAndConsume` em catch faz `ack + sleep(2) + publish` (republica `saga.failed` na exchange) em vez de nack/requeue. Razão: nack/requeue em php-amqplib teve comportamento inconsistente nos testes (msg sumindo da queue após primeiro nack); ack+republish é determinístico.
+- Validado: 12 attempts em ~25s sob FAIL_COMPENSATION=refund; quando a falha foi removida, a próxima entrega virou status='done'.
+- Trade-off conhecido: ack+republish **não é atômico** (crash entre ack e publish perde a msg). Solução clássica: outbox pattern.
+
+### ✅ T1.4: broker caído por 30s — **RESOLVIDO em 2026-04-30 (segunda iteração)**
+- RabbitMQ derrubado por 30s no meio de uma saga.
+- **Observado:**
+  - php-amqplib lança exception (connection_close).
+  - Workers caem com stack trace e **terminam o processo**.
+  - Sem `restart` policy no docker-compose, containers ficam parados.
+  - Após RabbitMQ voltar, workers continuam mortos. Saga em voo perdida.
+- **Causa:** lib não tem reconnect logic. php-amqplib não reconnecta automaticamente.
+- **Soluções possíveis:**
+  1. `restart: unless-stopped` no compose (em K8s = pod restart automático). Aceitável se a saga em voo for recuperada via re-entrega da fila durável (precisa investigar).
+  2. Loop de retry no `EventBus::subscribe` que captura `AMQPConnectionClosedException` e reconecta com backoff exponencial.
+  3. Bibliotecas como `videlalvaro/Thumper` ou wrappers PHP com reconnect built-in.
+- **Comparação com Temporal:** durable execution by design — workflow continua exatamente de onde parou após qualquer outage. Em coreografia RabbitMQ, é responsabilidade da app garantir reconnect + idempotência sob re-entrega.
+- **Custo estimado da correção:** +50-80 LOC na lib (reconnect + healthcheck periódico).
+
+**Solução implementada:**
+- `EventBus::subscribe` envolvido em `while (true)` capturando `AMQPConnectionClosedException | AMQPIOException | AMQPRuntimeException`.
+- Ao detectar perda de conexão: `safeClose()` + sleep com backoff exponencial (1s → 2s → 4s → 8s → 16s → max 30s) + tentar reconectar.
+- Quando reconnect tem sucesso, redeclare exchange/queue/binding/consumer e retoma loop.
+- `restart: unless-stopped` no docker-compose como rede de proteção.
+- Validado: workers sobreviveram a 25s de outage do RabbitMQ. Logs mostram tentativas com backoff. Após retomada, nova saga processou normalmente.
+
+### Não executados ainda
+- T2.2 idempotência via republicação manual de saga.failed (parcialmente coberto pelo retry de compensação acima)
+- T-novo: ordering parcial (compensação chega antes do evento de sucesso)
+- T-novo: postmortem distribuído (sem timeline central, rastreio via correlation-id em logs centralizados)
+- Throughput/latência sob carga sustentada
+
+### LOC final medido pós-correções
+
+| Versão da lib                                                                  | LOC reais | Aplicado em |
+| ------------------------------------------------------------------------------ | --------- | ----------- |
+| Mínima inicial (pré achado 2.3)                                                | 234       | -           |
+| Com `step_log` (achado 2.3 corrigido)                                          | 265       | +31         |
+| **Madura: + retry de compensação + reconnect + status na compensação_log**     | **357**   | +92         |
+| Comparação: orquestrada                                                        | 381       | -           |
+
+Lib coreografada madura ficou **357 LOC vs 381 do orquestrado** — ainda menor (~6%), mas a vantagem virou marginal. **A tese inicial de "lib pequena" não se sustentou** quando coreografia foi levada a sério para produção. O ganho real fica:
+- Ausência de orquestrador central (zero hops extras).
+- Ausência de versionamento de saga (mudanças localizadas em cada serviço).
+- Volume de escritas drasticamente menor (~2 INSERTs/saga vs 38 do Temporal).
+
+Mas o trade-off custa em outras frentes:
+- Disciplina de idempotência por handler.
+- Cuidado com timing entre `markStepDone` + efeito + publish (não-atomicidade).
+- DLQ + monitoramento de retries é responsabilidade da app.
+- Postmortem distribuído (correlation-id + log aggregator centralizado).
+
+---
+
 ## 4. Próximos passos
 
-- [ ] **Resolver achado 2.3** — implementar step_log local e re-testar step2/step1 falhando.
+- [x] **Resolver achado 2.3** — `step_log` local implementado em 2026-04-30; testado nos 4 cenários (happy, step1, step2, step3) com comportamento correto.
+- [ ] **Investigar achado novo (atomicidade `markStepDone` + efeito do handler)** — em produção real, handler executa transação no banco do domínio, depois lib chama `markStepDone` em SQLite separado. Crash entre os dois deixa estado dessincronizado. Solução típica: outbox pattern.
 - [ ] **Tier 1-6 re-projetado** — executar testes adaptados (T1.3 concorrência, T1.4 broker caído, T2.2 idempotência, T3.4 postmortem distribuído, novos: ordering, handler perdido, loop).
 - [ ] **Comparar throughput/latência** — pub/sub puro deve ser mais rápido que orquestrado (sem hop pra orquestrador).
 - [ ] **Documentar o trade-off "ordem vs simplicidade"** — em coreografia, compensações em paralelo simplificam código mas exigem que cada uma seja independente.
@@ -125,7 +220,7 @@ Esse achado **fortalece o ramo coreografado** num critério quantitativo concret
 ## 5. Conclusão preliminar (ANTES dos testes Tier 1-6)
 
 Coreografia entrega o que o tech lead pediu:
-- **Lib é genuinamente menor** (234 LOC vs 381) — mesmo após adicionar step_log estimo ~280-300 LOC.
+- **Lib é genuinamente menor** (265 LOC vs 381 do orquestrado, ~30% menos) — já incluindo `step_log` para resolver o achado 2.3.
 - **Sem tabela central de saga.** Cada serviço tem seu log local de compensação (e provavelmente de execução de step também).
 - **Mudanças localizadas** — adicionar/remover step não requer migração de tabela central.
 

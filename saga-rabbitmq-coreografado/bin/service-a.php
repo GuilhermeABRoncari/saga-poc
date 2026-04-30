@@ -7,9 +7,9 @@ require __DIR__ . '/../vendor/autoload.php';
 use App\Handlers\ServiceA\ConfirmShippingHandler;
 use App\Handlers\ServiceA\ReleaseStockCompensation;
 use App\Handlers\ServiceA\ReserveStockHandler;
-use Mobilestock\SagaCoreografada\CompensationLog;
 use Mobilestock\SagaCoreografada\EventBus;
 use Mobilestock\SagaCoreografada\SagaListener;
+use Mobilestock\SagaCoreografada\SagaLog;
 
 $bus = new EventBus(
     host: $_ENV['AMQP_HOST'] ?? 'localhost',
@@ -18,7 +18,7 @@ $bus = new EventBus(
     pass: $_ENV['AMQP_PASS'] ?? 'guest',
 );
 
-$log = new CompensationLog($_ENV['COMPENSATION_DB'] ?? __DIR__ . '/../storage/service-a.sqlite');
+$log = new SagaLog($_ENV['SAGA_DB'] ?? __DIR__ . '/../storage/service-a.sqlite');
 
 (new SagaListener('service-a', $bus, $log))
     ->react('saga.started', 'reserve_stock', 'stock.reserved', new ReserveStockHandler())

@@ -6,10 +6,14 @@ namespace Mobilestock\SagaCoreografada;
 
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Exception\AMQPRuntimeException;
+use PhpAmqpLib\Exception\AMQPIOException;
+use PhpAmqpLib\Exception\AMQPConnectionClosedException;
 use PhpAmqpLib\Message\AMQPMessage;
 
 /**
- * Event bus minimalista sobre RabbitMQ topic exchange.
+ * Event bus minimalista sobre RabbitMQ topic exchange, com reconnect
+ * automático em caso de queda do broker.
  *
  * Coreografia pura: cada serviço publica eventos de domínio e
  * subscribe nos eventos que ele precisa reagir. Não há broker central
@@ -22,9 +26,18 @@ final class EventBus
     private AMQPStreamConnection $conn;
     private AMQPChannel $channel;
 
-    public function __construct(string $host, int $port, string $user, string $pass)
+    public function __construct(
+        private readonly string $host,
+        private readonly int $port,
+        private readonly string $user,
+        private readonly string $pass,
+    ) {
+        $this->connect();
+    }
+
+    private function connect(): void
     {
-        $this->conn = new AMQPStreamConnection($host, $port, $user, $pass);
+        $this->conn = new AMQPStreamConnection($this->host, $this->port, $this->user, $this->pass);
         $this->channel = $this->conn->channel();
         $this->channel->exchange_declare(self::EXCHANGE, 'topic', false, true, false);
     }
@@ -48,8 +61,31 @@ final class EventBus
     /**
      * @param string[] $routingKeys
      * @param callable(string $eventType, string $sagaId, array $payload): void $handler
+     *        Lança exception se houver falha que justifique requeue (ex.: compensação que falhou).
      */
     public function subscribe(string $queue, array $routingKeys, callable $handler): void
+    {
+        $backoff = 1;
+        while (true) {
+            try {
+                $this->declareAndConsume($queue, $routingKeys, $handler);
+                $backoff = 1;
+            } catch (AMQPConnectionClosedException | AMQPIOException | AMQPRuntimeException $e) {
+                fwrite(STDERR, "[bus] connection lost ({$e->getMessage()}); reconnecting in {$backoff}s\n");
+                $this->safeClose();
+                sleep($backoff);
+                $backoff = min($backoff * 2, 30);
+                try {
+                    $this->connect();
+                } catch (\Throwable $reconnect) {
+                    fwrite(STDERR, "[bus] reconnect failed: {$reconnect->getMessage()}\n");
+                }
+            }
+        }
+    }
+
+    /** @param string[] $routingKeys */
+    private function declareAndConsume(string $queue, array $routingKeys, callable $handler): void
     {
         $this->channel->queue_declare($queue, false, true, false, false);
         foreach ($routingKeys as $key) {
@@ -63,8 +99,10 @@ final class EventBus
                 $handler($data['event_type'], $data['saga_id'], $data['payload']);
                 $msg->ack();
             } catch (\Throwable $e) {
-                fwrite(STDERR, "[bus error] {$e->getMessage()}\n");
-                $msg->nack(false, false);
+                fwrite(STDERR, "[bus] handler error ({$e->getMessage()}); ack+republish for delayed retry\n");
+                $msg->ack();
+                sleep(2);
+                $this->publish($data['event_type'], $data['saga_id'], $data['payload']);
             }
         });
 
@@ -73,9 +111,20 @@ final class EventBus
         }
     }
 
+    private function safeClose(): void
+    {
+        try {
+            $this->channel->close();
+        } catch (\Throwable) {
+        }
+        try {
+            $this->conn->close();
+        } catch (\Throwable) {
+        }
+    }
+
     public function close(): void
     {
-        $this->channel->close();
-        $this->conn->close();
+        $this->safeClose();
     }
 }
