@@ -156,16 +156,20 @@ PoC reaberta após decisão preliminar para validar definitivamente. Resultados 
 
 A pergunta de [`consideracoes.md`](./consideracoes.md) §9 era: _"Com que frequência você espera mudar a forma de uma saga vs mudar regras de negócio dentro dos passos?"_
 
-**Implicações concretas das respostas possíveis:**
+**Resposta do tech lead (2026-04-30):**
 
-- **Se "raramente" (típico):** o achado T5.1 (silent corruption no reordenamento) torna-se evento raro. RabbitMQ + lib + disciplina pode funcionar. Pesar tradeoff custo eng (17-23 dias inicial) vs latência ganha (22ms p99).
-- **Se "frequentemente" (atípico):** T5.1 vira certeza ao longo do tempo (alguém esquece). Temporal é seguro por construção.
-- **Se "não sabemos ainda":** padrão organizacional precisa ser **defensivo** — assumir que mudanças vão acontecer e que algum dev vai esquecer de bumpar `saga_version`. Temporal compra essa garantia automaticamente.
+> "A regra de negócio muda com muita frequência, e devemos deixar o mínimo de responsabilidades ao dev pra manusear um `saga_step` no banco."
 
-A resposta também calibra **timeline de adoção**:
+**Leitura técnica:**
 
-- 4 sistemas × times independentes × deploys ao longo de anos = probabilidade cumulativa alta de incidentes T5.1 mesmo se "raros".
-- Se cada incidente custa um postmortem + correção manual + comunicação com cliente, o custo cumulativo provavelmente ultrapassa os 7-13 dias de "economia inicial" do RabbitMQ em poucos meses.
+1. **"Regra de negócio muda com muita frequência"** — em Temporal, regra de negócio vive em **Activities (PHP comum)**, não no Workflow. Mudar regra de negócio = deploy normal, sem `Workflow::getVersion()`, sem cuidado especial. O custo de versionamento Temporal só aparece quando a **forma da saga** muda (adicionar/reordenar/remover step) — caso raro. Esse cenário é **o melhor caso para Temporal**: paga zero custo de versionamento no dia-a-dia.
+2. **"Mínimo de responsabilidades ao dev pra manusear `saga_step` no banco"** — descarta de vez a alternativa minoritária (RabbitMQ + lib `mobilestock/saga`), que **exige** que o dev mantenha `saga_version` na coluna, faça bump no deploy, escreva `definition(int $version)`, lembre de testar que sagas em voo não quebram. Temporal não tem `saga_step` no banco — o estado vive no event history do Temporal server, opaco ao app.
+
+**Veredito:** a resposta **reforça** a recomendação de Temporal sem reabrir a alternativa minoritária. Não há condição em §6.3 que se aplique. Caminho fica:
+
+- Manter Temporal como recomendação principal (§6.1, §6.2).
+- §6.3 (alternativa RabbitMQ + lib) **descartada** — pré-condição "time se compromete a manter `saga_version` + lint + code review centralizado SEM falhar" diretamente conflita com "mínimo de responsabilidades ao dev".
+- Calibração de adoção: 4 sistemas × times independentes × deploys ao longo de anos com **deploys frequentes de regra de negócio** torna ainda mais crítico ter o **Activities/Workflow split** que Temporal entrega de fábrica. RabbitMQ+lib forçaria todos esses deploys frequentes a passarem por code review centralizado na lib — gargalo organizacional.
 
 ---
 

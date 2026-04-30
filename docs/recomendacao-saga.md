@@ -8,7 +8,7 @@
 >
 > **3ª PoC (Step Functions) reaberta e fechada em 2026-04-29:** confirmou que Step Functions adiciona "zero-ops" como atrativo, mas perde nos critérios qualitativos críticos (latência ~16x maior que Temporal, lock-in AWS profundo, custo $51k/ano vs ~$5k/ano self-host EKS). Não muda a recomendação — só fortalece.
 >
-> **Sujeita a confirmação do tech lead** com base na pergunta-chave de §6 (frequência esperada de mudanças na forma das sagas).
+> **Confirmada pelo tech lead em 2026-04-30** — resposta à pergunta-chave de §6 reforça Temporal e descarta a alternativa minoritária (§7.3). Detalhes em [`fechamento.md`](./fechamento.md) §5.
 
 ---
 
@@ -209,11 +209,11 @@ A pergunta concreta cuja resposta calibra peso final do achado mais sério (T5.1
 
 > **"Com que frequência você espera mudar a forma de uma saga (adicionar step, reordenar, mudar compensação) vs mudar regras de negócio dentro dos passos?"**
 
-- **Se "raramente" (típico):** RabbitMQ ainda é viável, mas exige ~17-23 dias eng + disciplina permanente em 4 times. Risco residual de silent corruption se algum dev esquecer `saga_version`.
-- **Se "frequentemente" (atípico):** Temporal é seguro por construção. Risco T5.1 evitado estruturalmente.
-- **Se "não sabemos":** assumir defensivamente que mudanças vão acontecer — Temporal compra a garantia automaticamente.
+**Resposta do tech lead em 2026-04-30:**
 
-A resposta também calibra **timeline de adoção**: 4 sistemas × times independentes × deploys ao longo de anos = probabilidade cumulativa alta de incidentes mesmo se "raros".
+> "A regra de negócio muda com muita frequência, e devemos deixar o mínimo de responsabilidades ao dev pra manusear um `saga_step` no banco."
+
+**Implicação:** a alternativa minoritária de §7.3 (RabbitMQ + lib `mobilestock/saga`) fica **descartada** — sua pré-condição era exatamente "time se compromete a manter `saga_version` + lint custom + code review centralizado SEM falhar", o oposto de "mínimo de responsabilidades ao dev". Em Temporal, regra de negócio vive em **Activities (PHP comum)**, sem `Workflow::getVersion()` no dia-a-dia — o melhor caso para Temporal: paga zero custo de versionamento em deploys frequentes de regra. Detalhamento em [`fechamento.md`](./fechamento.md) §5.
 
 ## 7. Recomendação fechada (2026-04-29)
 
@@ -239,11 +239,11 @@ A natureza qualitativa desses critérios (correção, durabilidade, observabilid
 - **Race condition na inicialização** (workers tentam conectar antes do server pronto): adicionar healthcheck gRPC + `depends_on` no compose canônico.
 - **SDK PHP é "segunda classe"** (Spiral Scout sob contrato com Temporal Inc): mitigar com pacote interno isolando apps do SDK; fork é viável (Apache 2.0).
 
-### 7.3 Alternativa minoritária
+### 7.3 Alternativa minoritária — DESCARTADA em 2026-04-30
 
-Se o tech lead responder à pergunta de §6 com "**a forma da saga muda raramente E o time se compromete a manter `saga_version` + lint custom + code review centralizado SEM falhar**", então RabbitMQ + lib `mobilestock/saga` continua viável.
+A pré-condição era: "**a forma da saga muda raramente E o time se compromete a manter `saga_version` + lint custom + code review centralizado SEM falhar**". A resposta do tech lead em §6 explicita "mínimo de responsabilidades ao dev pra manusear um `saga_step` no banco" — diretamente conflita com manter `saga_version` na coluna e bumpar a cada mudança de forma.
 
-Custo: ~17-23 dias eng inicial + manutenção recorrente + risco residual permanente. Não é recomendação errada per se; é recomendação **mais arriscada** dado o histórico humano de esquecimentos em deploys.
+Custo de RabbitMQ + lib seria ~17-23 dias eng inicial + manutenção recorrente + risco residual permanente. Caminho não retomado.
 
 ### 7.4 Casos pontuais
 
@@ -263,7 +263,7 @@ Casos pontuais que **não justificam adotar plataforma nova** (1-2 fluxos isolad
 Se durante a adoção qualquer um destes mudar, parar e revisar antes de continuar:
 
 - **Volume real de sagas se confirmar muito baixo** (<1000/dia agregadas) → reconsiderar SQS + lógica simples.
-- **Tech lead responder à pergunta de §6 com "raramente E o time mantém disciplina"** → revisar tradeoff RabbitMQ vs Temporal.
+- ~~**Tech lead responder à pergunta de §6 com "raramente E o time mantém disciplina"**~~ → resolvido em 2026-04-30 (resposta foi o oposto, ver §6).
 - **Spiral Scout perder contrato com Temporal Inc** → re-avaliar SDK PHP (custo de fork ~viável).
 - **AWS lançar Step Functions com SDK PHP nativo + custo razoável** → reconsiderar.
 - **Migração EKS for cancelada** → reabrir avaliação (Temporal não suporta Swarm oficialmente).
