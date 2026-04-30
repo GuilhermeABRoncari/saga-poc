@@ -189,6 +189,27 @@ Empate qualitativo. Temporal vence em primeira leitura, RabbitMQ vence em "como 
 | Healthcheck            | Resolvido com `tctl cluster health` no service temporal + `depends_on: condition: service_healthy` nos workers/alerter |
 | Logs                   | Pelo SDK PHP, via stdout do worker — fácil de integrar com qualquer log aggregator                                     |
 
+### 7.1 Volume de escritas no banco — medido em 2026-04-30
+
+Critério levantado pelo tech lead após observar 31+ inserções por workflow em `laravel-workflow`. Medição direta no Postgres do `saga-temporal` (1 saga isolada, contagem antes/depois em todas as tabelas):
+
+| Cenário              | INSERTs por saga | Detalhamento                                                                                          |
+| -------------------- | ---------------- | ----------------------------------------------------------------------------------------------------- |
+| Happy-path (3 steps) | **38**           | history_node +12, history_tree +1, executions +1, current_executions +1, timer_tasks +12, transfer_tasks +8, visibility_tasks +3 |
+| Com compensação (FORCE_FAIL=step3) | **53** | Sobe principalmente em history_node (+18 — retries antes de MAXIMUM_ATTEMPTS_REACHED + compensações) e tasks |
+
+**Comparação:**
+- RabbitMQ-orquestrado (`saga-rabbitmq/`): **1 INSERT + 4 UPDATEs** por saga.
+- RabbitMQ-coreografado (`saga-rabbitmq-coreografado/`): **0 happy / 2 com compensação**.
+
+**Em escala de produção** (4 sistemas × ~1k-10k sagas/dia = 4k-40k sagas/dia):
+- Temporal: **152k-2.1M INSERTs/dia** só de metadados.
+- Cada retry de Activity adiciona eventos — uma saga que demora pra falhar pode ter 100+ rows em `history_node`.
+- Custo Cloud: Cloud cobra por action; cada evento conta. Em volume alto, agrava o custo de $58k/ano em escala já documentado.
+- Latência: cada evento exige round-trip de persistência — explica parcialmente o p99 de 351ms vs 22ms do RabbitMQ medido em testes anteriores.
+
+**Veredito do critério:** não desqualifica Temporal sozinho, mas é fator quantitativo concreto que entra no peso da decisão final. Combinado com custo de adoção (~1 semestre) e necessidade de lib interna, fortalece o caso de coreografia em volumes altos.
+
 ---
 
 ## 8. Custo projetado 12 meses

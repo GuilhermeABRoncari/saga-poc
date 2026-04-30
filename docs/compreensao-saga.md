@@ -158,7 +158,20 @@ Independente do nome ("SAGA", "pipeline com compensação", "orquestração de a
 
 ### 5.1 Orquestração ou coreografia?
 
-Para um pipeline linear curto (5 passos, sem ramificação), **orquestração** é mais simples de raciocinar e debugar — um único lugar tem o "mapa" da saga. Coreografia compensa quando há múltiplos serviços reagindo em paralelo a eventos.
+> ⚠️ **Atualização 2026-04-30:** este documento foi escrito antes das PoCs e tendia naturalmente para "orquestração é o default". O pré-review com o tech lead reabriu essa decisão — ele propõe **coreografia como default**, com tabela central evitada por princípio. Use os critérios abaixo como referência, mas saiba que é o eixo de decisão atualmente em discussão. Estado da decisão e plano da 4ª PoC em [`recomendacao-saga.md`](./recomendacao-saga.md) e na memória persistente.
+
+**Critérios práticos para escolher (independente de quem é o "default"):**
+
+| Critério                                                               | Tende para         |
+| ---------------------------------------------------------------------- | ------------------ |
+| Pipeline linear curto (≤5 passos), single-team, fluxo bem definido     | **Orquestração** — único lugar tem o "mapa" da saga, debug simples |
+| Múltiplos times donos de serviços diferentes, evolução independente    | **Coreografia** — acoplamento mínimo, cada serviço só conhece os eventos que assina |
+| Estado complexo (timeouts, retries por step, dependências entre passos)| **Orquestração** — coordenação central simplifica raciocínio       |
+| Fluxo chatty event-driven, vários serviços reagindo em paralelo        | **Coreografia** — pub/sub é o modelo natural                       |
+| Auditoria/compliance exige timeline central da saga                    | **Orquestração** — observabilidade out-of-the-box                  |
+| Compensação por step é local e idempotente por construção              | **Coreografia** — cada serviço dono da sua compensação             |
+
+A escolha **não é binária organizacional** — em uma empresa com vários sistemas, casos diferentes podem usar padrões diferentes. Forçar um padrão único pra todos os casos é simplificação excessiva.
 
 ### 5.2 Onde mora o estado da saga?
 

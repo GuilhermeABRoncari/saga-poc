@@ -1,0 +1,19 @@
+{
+    "name": "mobilestock/saga-rabbitmq-coreografado-poc",
+    "description": "PoC de SAGA coreografada com RabbitMQ — sem orquestrador, sem state machine central, lib mínima de compensação por evento",
+    "type": "project",
+    "require": {
+        "php": "^8.3",
+        "php-amqplib/php-amqplib": "^3.7",
+        "ramsey/uuid": "^4.7"
+    },
+    "autoload": {
+        "psr-4": {
+            "Mobilestock\\SagaCoreografada\\": "src/Lib/",
+            "App\\Handlers\\": "src/Handlers/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

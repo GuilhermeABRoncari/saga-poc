@@ -2,13 +2,24 @@
 
 > Este documento registra a **decisão sobre qual ferramenta adotar como padrão de SAGA** para os sistemas da empresa (e-commerce, logística/transporte, financeiro, estoque). É complementar ao estudo em [`estudo.md`](./estudo.md), à compreensão do padrão em [`compreensao-saga.md`](./compreensao-saga.md), e à síntese das 6 baterias de teste em [`fechamento.md`](./fechamento.md).
 >
-> **Status atual (2026-04-29): RECOMENDAÇÃO FECHADA — Adotar Temporal como padrão organizacional.**
+> ## ⚠️ Status atual (2026-04-30): RECOMENDAÇÃO REABERTA
 >
-> Esta recomendação está fundamentada em **20 testes Tier 1-6** executados contra **três PoCs reais** (RabbitMQ, Temporal, Step Functions/LocalStack). Detalhes em [`checklist-testes.md`](./checklist-testes.md), [`findings-rabbitmq.md`](./findings-rabbitmq.md), [`findings-temporal.md`](./findings-temporal.md), [`findings-step-functions.md`](./findings-step-functions.md), [`consideracoes.md`](./consideracoes.md) e [`fechamento.md`](./fechamento.md).
+> Após pré-review com o tech lead em 2026-04-30, foi identificado um **miss metodológico**: as três PoCs e a comparação Tier 1-6 mediram exclusivamente **saga orquestrada** (orquestrador central + state machine no banco). O tech lead esclareceu que sua proposta original era **saga coreografada** (sem tabela central, lib mínima detectando erros e disparando eventos de compensação consumidos por handlers idempotentes em cada serviço).
 >
-> **3ª PoC (Step Functions) reaberta e fechada em 2026-04-29:** confirmou que Step Functions adiciona "zero-ops" como atrativo, mas perde nos critérios qualitativos críticos (latência ~16x maior que Temporal, lock-in AWS profundo, custo $51k/ano vs ~$5k/ano self-host EKS). Não muda a recomendação — só fortalece.
+> Implicações:
 >
-> **Confirmada pelo tech lead em 2026-04-30** — resposta à pergunta-chave de §6 reforça Temporal e descarta a alternativa minoritária (§7.3). Detalhes em [`fechamento.md`](./fechamento.md) §5.
+> - **T5.1** (silent corruption sob reordenamento de steps), justificativa primária da recomendação anterior, **não se aplica** ao modelo coreografado — não há saga_definition central para reordenar.
+> - A "alternativa minoritária" §7.3 (RabbitMQ + lib `mobilestock/saga` com `saga_version`) descrevia um modelo orquestrado, e a resposta do tech lead em §6 ("mínimo de responsabilidades ao dev pra manusear `saga_step` no banco") era na verdade um sinal de que **`saga_step` no banco não deveria existir** — ou seja, descartando orquestração centralizada, não descartando RabbitMQ como ferramenta.
+> - A comparação atual (Temporal × RabbitMQ-orquestrado × Step Functions) está **enviesada**: faltava o modelo coreografado.
+>
+> **Próximos passos antes de fechar novamente:**
+>
+> 1. Construir 4ª PoC: `saga-rabbitmq-coreografado/` — sem tabela central, lib mínima de compensação por evento, handlers idempotentes em cada serviço (ver §9).
+> 2. Re-projetar testes Tier 1-6 para o modelo coreografado: alguns caem (T5.1), outros mudam de forma (compensação fora de ordem, evento perdido, handler não-idempotente, loops), outros se mantêm (T1.4, T3.4).
+> 3. Reformular esta recomendação como **árvore de decisão** orquestração ⇄ coreografia, não como escolha de ferramenta única. Cada padrão se aplica a casos diferentes — coreografia para fluxos chatty/desacoplados, orquestração para fluxos com estado complexo/auditoria/timeouts não-triviais.
+> 4. Clarificar com o tech lead se a posição é "(A) coreografia para este caso específico" ou "(B) coreografia como padrão organizacional único" — a resposta calibra escopo da recomendação final.
+>
+> Tudo abaixo desta linha é o conteúdo da recomendação fechada em 2026-04-29 e mantido como **histórico**, não como decisão vigente. Leia com a ressalva acima.
 
 ---
 
@@ -270,4 +281,43 @@ Se durante a adoção qualquer um destes mudar, parar e revisar antes de continu
 
 ## 9. Resumo de uma frase
 
-A recomendação está **fechada** após 20 testes Tier 1-6 contra PoCs reais: **adotar Temporal como padrão organizacional**, primariamente porque RabbitMQ-PoC produziu silent corruption real em cenário comum (reordenar steps mid-deploy) enquanto Temporal panicou loud com mensagem clara — em 4 sistemas durante anos com 4 times deploying, a probabilidade cumulativa de esquecer mitigação manual no RabbitMQ é alta demais para ser padrão organizacional, mesmo com o trade-off de ~1 semestre de calibração com a dialética determinística do Temporal.
+~~A recomendação está **fechada** após 20 testes Tier 1-6 contra PoCs reais: **adotar Temporal como padrão organizacional**.~~
+
+**Atualização 2026-04-30:** a recomendação foi **reaberta** após pré-review com o tech lead. A comparação cobriu apenas modelos orquestrados; falta uma 4ª PoC de saga coreografada (RabbitMQ pub/sub + lib mínima de compensação) para fechar a discovery. A recomendação final será uma **árvore de decisão** orquestração ⇄ coreografia, não uma escolha única de ferramenta. Detalhes no bloco de status no topo deste documento.
+
+---
+
+## 10. Plano da 4ª PoC — saga coreografada (proposto)
+
+> Esta seção é proposta de trabalho, ainda não executada. Será detalhada em documento próprio antes do build (`saga-rabbitmq-coreografado/README.md`).
+
+**Modelo a implementar:**
+
+- Mesmos 3 passos do workflow de referência (`ReserveStock` → `ChargeCredit` → `ConfirmShipping`).
+- Cada serviço publica eventos de domínio em tópico RabbitMQ (`stock.reserved`, `credit.charged`, `shipping.failed`).
+- Step seguinte é disparado por subscription no evento anterior — sem orquestrador.
+- Quando qualquer step publica `<step>.failed`, lib publica evento `saga.<id>.failed` num tópico fanout.
+- Cada serviço **ouve** `saga.<id>.failed` e roda sua compensação **se aplicável** (idempotente via dedup-key).
+- Sem tabela `saga_states`, sem `saga_definition`, sem `saga_version`.
+
+**Lib estimada:** <100 LOC. Responsabilidades: detectar exception em handler de evento → publicar `saga.failed` → decorator de handler de compensação fazendo dedup via tabela leve `compensation_log(saga_id, step, applied_at)`.
+
+**Tier 1-6 reaplicado (esboço):**
+
+| Teste original | Sobrevive? | Forma adaptada                                                                  |
+| -------------- | ---------- | ------------------------------------------------------------------------------- |
+| T1.1 versionamento | ❌ não se aplica | Não há saga_definition central                                              |
+| T1.4 falha de persistência | ✅ | RabbitMQ broker caído por 30s — eventos são reentregues?                       |
+| T2.2 cobertura de falhas | ⚠️ adaptado | Compensação **idempotente** sob retry: estoque devolvido 2x = bug ou ok?      |
+| T3.4 postmortem | ⚠️ adaptado | Sem timeline central — correlation-id + logs distribuídos resolvem?           |
+| T5.1 reordenar steps | ❌ não se aplica | Não há ordem central; cada serviço só conhece sua subscription                |
+| **Novo: ordering** | ➕ | Compensação chega antes do evento de sucesso — handler idempotente sobrevive?   |
+| **Novo: handler perdido** | ➕ | Serviço offline quando `saga.failed` é publicado — DLQ + replay funciona?     |
+| **Novo: loop** | ➕ | Handler de compensação falha sempre — sistema detecta e para?                  |
+
+**Critérios de comparação adicionados:**
+
+- Acoplamento entre serviços (coreografia ganha por construção).
+- Custo cognitivo de debugar saga distribuída sem timeline central.
+- Disciplina exigida do dev (idempotência por handler).
+- Comportamento sob ordering parcial de eventos.

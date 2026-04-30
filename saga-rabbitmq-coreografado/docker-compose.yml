@@ -1,0 +1,47 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "5674:5672"
+      - "15674:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  service-a:
+    build: .
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      AMQP_HOST: rabbitmq
+      AMQP_PORT: 5672
+      AMQP_USER: guest
+      AMQP_PASS: guest
+      COMPENSATION_DB: /app/storage/service-a.sqlite
+      FORCE_FAIL: ${FORCE_FAIL:-}
+      SLOW_RESERVE_STOCK: ${SLOW_RESERVE_STOCK:-0}
+      SLOW_COMPENSATION: ${SLOW_COMPENSATION:-0}
+    volumes:
+      - ./storage:/app/storage
+    command: ["php", "bin/service-a.php"]
+
+  service-b:
+    build: .
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      AMQP_HOST: rabbitmq
+      AMQP_PORT: 5672
+      AMQP_USER: guest
+      AMQP_PASS: guest
+      COMPENSATION_DB: /app/storage/service-b.sqlite
+      FORCE_FAIL: ${FORCE_FAIL:-}
+      FAIL_COMPENSATION: ${FAIL_COMPENSATION:-}
+      SLOW_COMPENSATION: ${SLOW_COMPENSATION:-0}
+    volumes:
+      - ./storage:/app/storage
+    command: ["php", "bin/service-b.php"]

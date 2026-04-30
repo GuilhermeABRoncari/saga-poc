@@ -2,9 +2,19 @@
 
 > Documento de consolidação da decisão. Resume **20 testes Tier 1-6** executados contra três PoCs reais (`saga-rabbitmq/`, `saga-temporal/`, `saga-step-functions/`), implementando o mesmo workflow de referência (`ActivateStoreSaga` reduzido). Toda a evidência empírica + análise está em [`checklist-testes.md`](./checklist-testes.md), [`findings-rabbitmq.md`](./findings-rabbitmq.md), [`findings-temporal.md`](./findings-temporal.md), [`findings-step-functions.md`](./findings-step-functions.md) e [`consideracoes.md`](./consideracoes.md).
 >
-> **Atualizado em 2026-04-29** com a 3ª PoC (AWS Step Functions via LocalStack). A 3ª PoC foi originalmente "em standby" e reaberta para fechar definitivamente o estudo. Resultado: **a recomendação de adotar Temporal continua válida** — Step Functions adiciona "zero ops" como atrativo mas perde nos critérios qualitativos críticos (correção sob mudança de código, latência, lock-in).
+> ## ⚠️ Atualização 2026-04-30 — fechamento revisado para REABERTO
 >
-> Este documento é o **input direto para fechar [`recomendacao-saga.md`](./recomendacao-saga.md)**.
+> Após pré-review com o tech lead, foi identificado que **as três PoCs implementaram saga orquestrada** (orquestrador central + state machine no banco), enquanto a proposta original do tech lead era **saga coreografada** (sem tabela central, lib mínima de compensação por evento, handlers idempotentes em cada serviço).
+>
+> Implicações sobre o conteúdo deste documento:
+>
+> - **T5.1 ("silent corruption sob reordenamento")**, citado várias vezes abaixo como achado mais grave, **não se aplica** ao modelo coreografado — não existe `saga_definition` central para reordenar.
+> - O score consolidado (Temporal vence 14, RabbitMQ vence 13) está **enviesado**: comparou Temporal-orquestrador × RabbitMQ-orquestrador × Step Functions-orquestrador, todos no mesmo modelo. Falta o ramo coreografado.
+> - A resposta do tech lead em §5 ("mínimo de responsabilidades ao dev pra manusear `saga_step` no banco") foi reinterpretada: ele estava sinalizando que **`saga_step` não devia existir**, ou seja, descartando orquestração com state machine — não descartando RabbitMQ como ferramenta. A leitura técnica em §5 que classificava isso como "reforço pra Temporal" estava **incorreta**.
+>
+> **A recomendação de adotar Temporal foi reaberta.** Próximos passos antes de re-fechar: 4ª PoC (`saga-rabbitmq-coreografado/`), re-projeção dos testes Tier 1-6 para o novo modelo, reformulação da recomendação como **árvore de decisão** orquestração ⇄ coreografia. Detalhes em [`recomendacao-saga.md`](./recomendacao-saga.md) §10.
+>
+> O conteúdo abaixo é o estado em 2026-04-29 — útil como referência para o ramo orquestrado, mas **não representa a decisão vigente**.
 
 ---
 
@@ -152,24 +162,36 @@ PoC reaberta após decisão preliminar para validar definitivamente. Resultados 
 
 ---
 
-## 5. Resposta à pergunta-chave do tech lead
+## 5. Resposta à pergunta-chave do tech lead — leitura revisada em 2026-04-30
 
 A pergunta de [`consideracoes.md`](./consideracoes.md) §9 era: _"Com que frequência você espera mudar a forma de uma saga vs mudar regras de negócio dentro dos passos?"_
 
-**Resposta do tech lead (2026-04-30):**
+**Resposta do tech lead (2026-04-30, registrada literalmente):**
 
 > "A regra de negócio muda com muita frequência, e devemos deixar o mínimo de responsabilidades ao dev pra manusear um `saga_step` no banco."
 
-**Leitura técnica:**
+### 5.1 Leitura inicial (subsequentemente corrigida)
 
-1. **"Regra de negócio muda com muita frequência"** — em Temporal, regra de negócio vive em **Activities (PHP comum)**, não no Workflow. Mudar regra de negócio = deploy normal, sem `Workflow::getVersion()`, sem cuidado especial. O custo de versionamento Temporal só aparece quando a **forma da saga** muda (adicionar/reordenar/remover step) — caso raro. Esse cenário é **o melhor caso para Temporal**: paga zero custo de versionamento no dia-a-dia.
-2. **"Mínimo de responsabilidades ao dev pra manusear `saga_step` no banco"** — descarta de vez a alternativa minoritária (RabbitMQ + lib `mobilestock/saga`), que **exige** que o dev mantenha `saga_version` na coluna, faça bump no deploy, escreva `definition(int $version)`, lembre de testar que sagas em voo não quebram. Temporal não tem `saga_step` no banco — o estado vive no event history do Temporal server, opaco ao app.
+A leitura inicial classificou a resposta como "reforço para Temporal" e "alternativa RabbitMQ descartada", baseada em duas inferências:
 
-**Veredito:** a resposta **reforça** a recomendação de Temporal sem reabrir a alternativa minoritária. Não há condição em §6.3 que se aplique. Caminho fica:
+1. "Regra muda muita" → cenário ótimo para Temporal (Activities = PHP comum, sem `getVersion()`).
+2. "Mínimo de `saga_step` no banco" → incompatível com a alternativa RabbitMQ + lib que exigia `saga_version` + bump manual.
 
-- Manter Temporal como recomendação principal (§6.1, §6.2).
-- §6.3 (alternativa RabbitMQ + lib) **descartada** — pré-condição "time se compromete a manter `saga_version` + lint + code review centralizado SEM falhar" diretamente conflita com "mínimo de responsabilidades ao dev".
-- Calibração de adoção: 4 sistemas × times independentes × deploys ao longo de anos com **deploys frequentes de regra de negócio** torna ainda mais crítico ter o **Activities/Workflow split** que Temporal entrega de fábrica. RabbitMQ+lib forçaria todos esses deploys frequentes a passarem por code review centralizado na lib — gargalo organizacional.
+### 5.2 Leitura revisada após pré-review (2026-04-30 — final do dia)
+
+No pré-review, ficou claro que **a leitura inicial confundiu rejeição de orquestração com rejeição de RabbitMQ**. A posição real do tech lead:
+
+- Ele nunca pediu `saga_step` no banco — a PoC RabbitMQ é que introduziu isso (modelo orquestrado).
+- A proposta original dele é **saga coreografada**: lib mínima detecta erro num step, publica evento `saga.failed` em tópico, cada serviço consome esse evento e roda compensação idempotente local. Sem state machine, sem `saga_step`, sem `saga_version`.
+- "Mínimo de responsabilidades ao dev" não significa "vamos pra Temporal". Significa **"vamos pra um modelo que não exige tabela central de saga"** — coreografia atende isso com lib pequena (<100 LOC estimado).
+
+**Implicação correta:**
+
+- Temporal continua sendo um candidato viável para casos de orquestração com estado complexo.
+- **RabbitMQ-coreografado não foi avaliado** — falta a 4ª PoC.
+- A recomendação não pode fechar até que ambos os modelos (orquestrado e coreografado) tenham sido medidos com critérios comparáveis.
+
+A leitura técnica em §5.1 fica registrada como histórico do erro de interpretação. O caminho atual é executar a 4ª PoC e então reformular a recomendação como árvore de decisão (orquestração ⇄ coreografia, não Temporal × RabbitMQ).
 
 ---
 

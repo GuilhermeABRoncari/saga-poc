@@ -1,6 +1,14 @@
 # Findings: PoC RabbitMQ — medições para [`recomendacao-saga.md`](./recomendacao-saga.md) §3.2
 
 > Documento vivo. Atualizado conforme medimos cada critério. Quando todos os critérios estiverem preenchidos aqui (e o equivalente para Temporal), é hora de fechar a recomendação.
+>
+> ## ⚠️ Escopo (atualização 2026-04-30)
+>
+> Este documento mede **RabbitMQ no modelo orquestrado** — orquestrador central + state machine no banco (`saga_states`/`saga_steps`) + lib `mobilestock/saga` controlando ordem de steps e disparando compensação LIFO.
+>
+> Após pré-review com o tech lead em 2026-04-30, ficou claro que a proposta original era **RabbitMQ coreografado** — sem orquestrador, sem state machine, lib mínima detectando erro num step e publicando evento `saga.failed` consumido por handlers idempotentes em cada serviço. Esse modelo **não foi medido aqui** e está pendente em 4ª PoC (`saga-rabbitmq-coreografado/`).
+>
+> **Como ler este documento:** todos os números, comparações com Temporal, e em especial o achado T5.1 (silent corruption sob reordenamento) referem-se ao modelo orquestrado. Não generalizar para "RabbitMQ é ruim para saga" — referem-se a "RabbitMQ-orquestrado tem essas características vs Temporal-orquestrado".
 
 PoC vivo: [`../saga-rabbitmq/`](../saga-rabbitmq/).
 

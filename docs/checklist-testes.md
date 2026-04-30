@@ -2,6 +2,12 @@
 
 > Lista viva de testes para gerar evidência objetiva. Cada teste tem **como executar**, **o que medir** e **espaço para anotar resultado**. Resultados consolidados depois alimentam [`findings-rabbitmq.md`](./findings-rabbitmq.md), [`findings-temporal.md`](./findings-temporal.md), [`findings-step-functions.md`](./findings-step-functions.md) e a tabela §3.2 de [`recomendacao-saga.md`](./recomendacao-saga.md).
 >
+> ## ⚠️ Escopo dos testes (atualização 2026-04-30)
+>
+> Os 20 testes Tier 1-6 abaixo foram projetados para o **modelo orquestrado** (orquestrador central + state machine). Após pré-review com o tech lead, identificou-se que falta cobertura do **modelo coreografado** (sem orquestrador, lib mínima de compensação por evento).
+>
+> Quando a 4ª PoC (`saga-rabbitmq-coreografado/`) for construída, alguns testes não se aplicarão (T5.1 reordenamento) e novos testes serão adicionados (compensação out-of-order, handler não-idempotente, loop de eventos). Cada teste afetado tem nota explícita.
+>
 > **Histórico de execução:** os 20 testes foram primeiro rodados contra **RabbitMQ + Temporal** (Tier 1-6). Cada teste abaixo registra "Resultado RabbitMQ" e "Resultado Temporal". Após decisão preliminar, a **3ª PoC (Step Functions/LocalStack)** foi executada com os mesmos critérios; os resultados consolidados estão em [`findings-step-functions.md`](./findings-step-functions.md) (não duplicados aqui para manter o documento legível).
 >
 > Convenção de status:
@@ -473,6 +479,8 @@
 ## Tier 5 — Versionamento ampliado
 
 ### T5.1 Reordenar compensações
+
+> ⚠️ **Aplicabilidade (atualização 2026-04-30):** este teste só faz sentido em **modelos orquestrados** com saga_definition central. Em saga **coreografada** não há ordem global de steps para reordenar — cada serviço só conhece sua própria subscription. Quando a 4ª PoC (`saga-rabbitmq-coreografado/`) for executada, os testes equivalentes serão: (a) compensação chega antes do evento de sucesso, (b) handler de compensação não-idempotente, (c) loop de eventos. Resultado abaixo refere-se ao ramo orquestrado.
 
 - [x] **Executado em 2026-04-29.**
 - **Como executou:** SLOW_RESERVE_STOCK=15 em ambos PoCs. Disparada saga A com V0 (ordem reserveStock → chargeCredit). Durante o sleep do reserveStock, swap do código para V1 (chargeCredit → reserveStock — ordem invertida). Push do código + restart do orchestrator/workflow-worker.
