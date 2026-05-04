@@ -2,9 +2,9 @@
 
 > Documento simétrico ao [`findings-rabbitmq.md`](./findings-rabbitmq.md). Permite preencher a tabela §3.2 com os mesmos critérios. Usado para fechar a recomendação.
 >
-> ## Achado decisivo (2026-05-04) — Temporal NÃO suporta MariaDB
+> ## Achado relevante (2026-05-04, revisado) — Temporal não suporta MariaDB; alternativa preferida é MySQL 8
 >
-> Tentativa de trocar o backend do Temporal de Postgres para MariaDB (já que o ambiente alvo usa MariaDB em produção) **falhou** em 2026-05-04. Detalhes:
+> Tentativa de trocar o backend do Temporal de Postgres para MariaDB (já que o ambiente alvo usa MariaDB em produção) **falhou** em 2026-05-04. Detalhes técnicos da falha:
 >
 > - Imagem: `mariadb:11.4` + `temporalio/auto-setup:1.26` com driver `mysql8`.
 > - Migrations 1.0 → 1.14 do schema do Temporal **passam**, mas a partir daí há `CREATE INDEX … ((CAST(json_extract(data, '$.TemporalChangeVersion') AS CHAR(255) ARRAY)))` (sintaxe Multi-Valued Index do MySQL 8) que **MariaDB 11.4 não implementa**.
@@ -12,17 +12,18 @@
 >
 > **Backends suportados oficialmente pelo Temporal:** PostgreSQL 12+, MySQL 8.0+, Cassandra 3.11+. **MariaDB não está na lista.** Apesar de MariaDB ser fork do MySQL, divergências em features posteriores (Multi-Valued Indexes, JSON path syntax, generated columns) tornam o Temporal incompatível na prática. Confirmado lendo a [matriz de persistência oficial](https://docs.temporal.io/self-hosted-guide/defaults).
 >
-> **Implicação para a decisão (impacto fortemente negativo para Temporal):**
+> **Implicação para a decisão (revisada — impacto moderado, não decisivo):**
 >
-> 1. Adotar Temporal **obriga** ter um 2º SGBD dedicado ao engine (PostgreSQL ou MySQL 8). O banco principal do ambiente alvo continua MariaDB. Isso significa:
->    - **+1 SGBD para o time de plataforma operar** (backup, replicação, upgrade, monitoring, alertas).
->    - **+1 fonte de divergência** entre dev/staging/prod, considerando que a expertise estabelecida do time é em MariaDB/MySQL e não em Postgres.
->    - **Aurora MySQL/PostgreSQL** se EKS — managed, mas custo operacional adicional vs reusar RDS MariaDB existente.
-> 2. Em ambiente de dev local, devs precisam subir Postgres/MySQL para mexer em workflows — não é só "docker compose up". Onboarding fica mais pesado.
-> 3. Para equipes sem familiaridade com Postgres, qualquer issue de produção do Temporal vira "preciso aprender Postgres antes de debugar". Time-to-fix piora.
-> 4. **A premissa original do estudo era "stack uniforme"**. Temporal quebra essa premissa de forma irreversível.
+> Adotar Temporal **exige** provisionar um SGBD adicional dedicado ao engine. Mas a escolha desse SGBD muda significativamente o peso do achado:
 >
-> **Esse achado pode virar a decisão sozinho, mesmo com todos os outros critérios qualitativos a favor de Temporal.** A PoC continua rodando em Postgres apenas para preservar comparabilidade dos números — não como sinalização de que Postgres é viável em produção.
+> - **MySQL 8 (RDS ou Aurora)** é a opção preferida — Temporal suporta oficialmente, time mantém familiaridade quase total com a stack (MariaDB e MySQL 8 são primos diretos: queries, EXPLAIN, replicação e console RDS são quase idênticos), runbook DR aproveita o existente, e dev local sobe `mysql:8` ao lado do `mariadb:11.4` sem fricção.
+> - **Postgres** funciona, mas adiciona curva de aprendizado real (VACUUM, MVCC, dialeto SQL, ferramentas de observabilidade de DB). Custo financeiro idêntico ao MySQL 8 na mesma classe de instância (~$30-150/mês), mas custo de skill set é maior.
+> - **Cassandra** é descartada — apesar de ser NoSQL, é provavelmente o backend mais complexo de operar do trio (consistency levels por query, compaction strategies, repair sessions, tombstones, schema query-first). Faz sentido só em escala muito alta, e o time não tem familiaridade.
+> - **Postgres externo (Supabase/Neon)** é descartado — fora do VPC implica latência de internet (5-50ms vs <1ms intra-VPC), egress AWS pago, e dados de saga fora do perímetro de compliance gerenciado.
+>
+> **Custo revisado da incompatibilidade** (assumindo MySQL 8 como escolha): **~3 dias eng inicial + ~$30-150/mês de RDS/Aurora MySQL 8 adicional + zero custo recorrente de skill set**. É um item quantificável de TCO, não um deal-breaker.
+>
+> **Conclusão:** este achado é **um critério a mais** na matriz de decisão — não bloqueador isolado. A PoC continua rodando em Postgres apenas para preservar comparabilidade dos números medidos (T1.4, T3.3, contagem de INSERTs). Detalhamento completo em §2.2.6.
 
 PoC vivo: [`../saga-temporal/`](../saga-temporal/).
 
@@ -234,39 +235,87 @@ Critério levantado após observar 31+ inserções por workflow em `laravel-work
 
 ---
 
-## 2.2.6 Incompatibilidade com MariaDB obriga 2º SGBD na adoção (NOVO — 2026-05-04)
+## 2.2.6 Incompatibilidade com MariaDB exige 2º SGBD na adoção (NOVO — 2026-05-04, revisado)
 
-> Detalhes técnicos da falha estão no banner no topo deste documento. Esta seção foca em **impacto na decisão**.
+> Detalhes técnicos da falha de migration estão no banner no topo deste documento. Esta seção foca em **impacto na decisão** e em **opções concretas** para contornar a incompatibilidade.
+>
+> **Nota de revisão:** uma versão anterior desta seção tratava o achado como "decisivo" e priorizava Postgres como caminho de mitigação. Esta versão é mais matizada: **MySQL 8 é alternativa preferida** (Temporal suporta oficialmente, time mantém stack mental) e o custo operacional é **menor** do que estimado inicialmente, embora real e quantificável.
 
-O ambiente alvo deste estudo usa **MariaDB em produção** como banco principal. A premissa original do estudo era manter stack uniforme: tudo o que entrar na arquitetura deve ser opera­cionalmente coerente com o que já existe. **Temporal quebra essa premissa.**
+O ambiente alvo deste estudo usa **MariaDB** como banco principal dos serviços. Apesar de MariaDB ser fork do MySQL, divergências em features posteriores (Multi-Valued Indexes, JSON path syntax, generated columns) tornam o Temporal incompatível na prática — confirmado empiricamente em 2026-05-04 e pela [matriz oficial de persistência](https://docs.temporal.io/self-hosted-guide/defaults), que lista apenas **PostgreSQL 12+, MySQL 8.0+ e Cassandra 3.11+**.
 
-| Dimensão                           | Custo concreto                                                                                                                    |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Operação de prod**               | +1 cluster Postgres/MySQL para SREs operarem (backup, restore, replicação, patching, alertas). Não trivial.                       |
-| **Custo financeiro**               | Aurora Postgres/MySQL gerenciado: ~$200-500/mês para um cluster pequeno HA. Por sistema, multiplicar.                             |
-| **Familiaridade do time**          | Devs e SREs têm fluência em MariaDB/MySQL. Postgres exige curva de aprendizado real (queries, EXPLAIN, vacuum, lock-modes).       |
-| **Disaster recovery**              | Runbook do MariaDB principal está pronto. Postgres do Temporal vai precisar do seu próprio runbook, testes de DR, sazonalidades.  |
-| **Dev local**                      | docker-compose precisa subir Postgres além do MariaDB do serviço principal. Mais memória, mais setup, mais surface de bug local. |
-| **Coerência de observabilidade**   | Métricas de DB do prod (queries lentas, lock waits, deadlocks) usam ferramentas calibradas para MariaDB. Postgres exige outro stack ou adapter. |
-| **Risco de divergência dev/prod**  | Se devs testarem em SQLite/MariaDB e prod usar Postgres, classes de bug aparecem só em produção (ex.: MERGE, RETURNING, JSONB).    |
+**Implicação direta:** adotar Temporal exige provisionar **um SGBD adicional** dedicado ao engine. Esse banco fica separado dos bancos de aplicação (que continuam MariaDB).
 
-**Custo total estimado de adoção** (incremental, **só por causa do banco**, sem contar Temporal em si): **~3-5 dias de eng** para setup inicial + **~0.5-1 dia/mês recorrente** de operação adicional (patching, monitoring, ajustes).
+### Opções de SGBD para o engine — análise comparativa
 
-**Por que isso pode virar a decisão sozinho:**
+A escolha de SGBD afeta custo, complexidade operacional e familiaridade. A análise abaixo considera workload realista (poucas dezenas a centenas de sagas/min) em ambiente AWS:
 
-1. RabbitMQ não tem essa dependência. A PoC RabbitMQ usa SQLite hoje, mas em produção usaria a **mesma instância MariaDB** que os serviços já usam — sem custo operacional adicional.
-2. RabbitMQ-coreografado é ainda mais leve: cada serviço tem seu `step_log`/`compensation_log` local em **MariaDB** do próprio serviço (que já existe).
-3. Argumentos a favor de Temporal (correção, durable execution, observabilidade) são **arquiteturais**, não compensam um custo **operacional permanente** de 2º SGBD.
+| Opção                                          | Custo/mês estimado          | Operação                                                          | Familiaridade do time | Adequação ao caso |
+| ---------------------------------------------- | --------------------------- | ----------------------------------------------------------------- | --------------------- | ----------------- |
+| **RDS MySQL 8 / Aurora MySQL** ⭐               | ~$30 (RDS small) a ~$150 (Aurora) | Mesma rotina dos RDS MariaDB existentes                          | Alta — MySQL é primo direto do MariaDB; queries, EXPLAIN, replicação são quase idênticos | **Recomendada** |
+| RDS Postgres / Aurora Postgres                  | ~$30 a ~$150                | Console e backups idênticos ao RDS, mas internals diferentes (vacuum, lock-modes, EXPLAIN ANALYZE) | Curva real — VACUUM/autovacuum, MVCC mais explícito, dialeto SQL com diferenças (`RETURNING`, `JSONB`, sequences) | Viável, custo de aprendizado mais alto |
+| Supabase / Neon / outro Postgres externo       | $25 base + uso + egress     | Console externo; backups do provedor; dados fora do VPC          | Mesma curva do Postgres | **Não recomendada** — fora do VPC implica latência (5-50ms vs <1ms), egress AWS ($0.09/GB), e questões de compliance |
+| Cassandra (Keyspaces ou DataStax Astra)        | $0.085/GB/mês storage + $1.45/M reads/writes (Keyspaces) ou similar | Tuning de consistency levels, compaction strategies (STCS/LCS/TWCS), repair sessions, tombstone management; schema query-first | **Nenhuma** no time | **Não recomendada** — overkill para o volume; Cassandra faz sentido só em escala muito alta (10k+ workflows/s sustentados) ou multi-DC ativo-ativo |
+| Self-hosted Postgres/MySQL em EC2/EKS          | Hardware barato             | Alto custo operacional (patching, backup, replicação manual)     | Depende                | Não recomendada quando há gerenciado disponível |
 
-**Mitigações possíveis (e suas limitações):**
+**Por que MySQL 8 (Aurora ou RDS) é a escolha preferida:**
 
-- **Temporal Cloud** evita o problema de operar Postgres self-hosted. Mas: custo cresce com volume (~$58k/ano em escala já calculado), e não resolve dev local.
-- **Mudar prod para Postgres** seria projeto separado de meses, com risco enorme. Fora de escopo.
-- **Cassandra** em vez de Postgres: Temporal suporta. Mas Cassandra tem operação ainda mais difícil, sem familiaridade no time. Pior, não melhor.
+1. **Temporal suporta oficialmente.** O driver `mysql8` é padrão; mesmo nível de testes que Postgres no Temporal.
+2. **Stack mental do time não muda.** Devs que escrevem queries para MariaDB conseguem ler/debugar MySQL 8 imediatamente. SREs operam ambos com a mesma rotina (snapshots, parameter groups, monitoring via CloudWatch RDS, `mysql-cli`).
+3. **Mesmo VPC, mesma latência baixa.** App ↔ banco do Temporal continua em <1ms, sem egress.
+4. **Disaster recovery aproveita runbook existente.** Procedimentos de snapshot/restore/failover do RDS MariaDB são literalmente os mesmos no RDS MySQL.
+5. **Dev local fica simples.** `docker-compose` sobe `mysql:8` ao lado do `mariadb:11.4` — duas imagens da mesma família, devs reconhecem o ambiente.
 
-**Veredito provisório:** este achado adiciona **~3-5 dias de eng + custo operacional permanente** ao TCO de adoção do Temporal, sem retorno para o produto. Combinado com gaps de PoC já documentados (versionamento, T1.4 em RabbitMQ-coreografado já mitigado), **inclina ainda mais a balança para coreografia em RabbitMQ + MariaDB local por serviço**.
+**Por que descartar Cassandra mesmo sendo "NoSQL" e suportada:**
 
-> **Nota**: este achado precisa ser pesado **antes** de discutir critérios qualitativos (correção, durable execution). Se ficar acordado que "2º SGBD em prod é deal-breaker", critérios qualitativos viram secundários — Temporal sai. Se ficar acordado que "vale o custo pelo benefício de durable execution", aí sim os qualitativos voltam à mesa.
+A intuição "NoSQL → mais simples" não se aplica a Cassandra, que é provavelmente **o mais complexo de operar** entre os três suportados pelo Temporal. Exige:
+
+- Decisões de **consistency level** por query (LOCAL_QUORUM, EACH_QUORUM, etc.).
+- Escolha consciente de **compaction strategy** (STCS / LCS / TWCS) — escolha errada degrada performance silenciosamente em produção.
+- **Repair sessions** periódicas (anti-entropy) — sem isso, dados divergem entre nós.
+- **Tombstone management** — queries lentas sem aviso quando há muitos.
+- **Schema query-first**: o time desenharia em torno das queries do Temporal, e refatorar depois é caro.
+- Sem **transações ACID** multi-row.
+
+Cassandra justifica seu custo operacional **só** em volumes muito altos (escala global, dezenas de milhares de workflows/s, multi-DC ativo-ativo). No volume realista esperado (poucas dezenas a 100/min), é overkill por mais de uma ordem de grandeza — paga complexidade alta sem retorno proporcional.
+
+**Por que descartar Supabase/Neon/Postgres externo:**
+
+Tecnicamente funciona, mas estar **fora do VPC** introduz três custos não-óbvios: latência de internet pública (5-50ms vs <1ms intra-VPC), egress AWS pago por GB, e — mais importante — dados de saga (que carregam payloads de domínio) saem do perímetro de compliance gerenciado. RDS/Aurora dentro da própria VPC entrega o mesmo Postgres com nenhum desses custos extras. Supabase/Neon faz sentido em outros cenários (startup early-stage sem AWS estabelecido), não aqui.
+
+### Custo de adoção revisado (com MySQL 8 escolhido)
+
+| Item                                                      | Custo                                       |
+| --------------------------------------------------------- | ------------------------------------------- |
+| Provisionar instância RDS MySQL 8 ou Aurora MySQL         | ~1 dia (mesma rotina das instâncias atuais) |
+| Configurar Temporal apontando para a nova instância       | ~0.5 dia                                    |
+| Adaptar dev local (`docker-compose` com `mysql:8`)        | ~0.5 dia                                    |
+| Runbook DR / monitoring / alertas                         | ~1 dia (reaproveitamento dos existentes)    |
+| **Total inicial**                                         | **~3 dias**                                 |
+| Operação recorrente                                       | Marginal — mesma rotina dos RDS atuais      |
+| Custo financeiro                                          | ~$30-150/mês de RDS/Aurora adicional        |
+
+Comparado à versão original desta seção, o custo cai de "3-5 dias inicial + 0.5-1 dia/mês recorrente" para "**~3 dias inicial + zero recorrente extra**" — assumindo a escolha de MySQL 8.
+
+### Implicação para a decisão
+
+O achado **continua relevante**, mas perde força como bloqueador isolado:
+
+1. **Sim, Temporal exige um SGBD adicional.** Isso não desaparece.
+2. **Não, esse SGBD adicional não exige skill set novo nem rotina operacional nova** — desde que a escolha seja MySQL 8, o time absorve com custo marginal.
+3. **Custo financeiro é uma linha a mais na fatura RDS** (~$30-150/mês), não um item negociado em comitê.
+4. **Argumentos arquiteturais a favor de Temporal** (correção sob mudança, durable execution, observabilidade out-of-the-box) **voltam para a mesa** — não estão mais bloqueados por "custo operacional permanente proibitivo".
+
+**Comparação com RabbitMQ + lib interna:** RabbitMQ continua tendo a vantagem de **zero SGBD adicional** — o estado de saga (`saga_states` no orquestrado, `step_log`/`compensation_log` local no coreografado) usa as instâncias MariaDB que os serviços já têm. Mas a vantagem é menor que a versão anterior desta seção sugeria: ~3 dias inicial + ~$30-150/mês não é um deal-breaker, é um item de TCO entre vários.
+
+### Veredito revisado
+
+Esta seção **não decide a escolha sozinha**. O custo de SGBD adicional é real e quantificável, mas pequeno comparado a outros eixos (custo de adoção do Temporal em si, lib interna no caso RabbitMQ, custo Cloud em escala, achados qualitativos T5.1/T1.4/T3.4). Reincorporar este achado ao restante da matriz como **um critério a mais** — não como bloqueador.
+
+Pontos abertos para discussão posterior:
+
+- Confirmar se RDS/Aurora MySQL 8 é mesmo aceitável pelo time de plataforma (alinhamento com decisões de roadmap de DB).
+- Quantificar custo financeiro mais precisamente para a instância escolhida (depende de retention de history events).
+- Validar que dev local com `mysql:8` ao lado de `mariadb:11.4` não introduz fricção de fluxo nos devs.
 
 ---
 

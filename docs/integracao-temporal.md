@@ -42,7 +42,7 @@ Decisões de plataforma que precisam estar resolvidas antes de qualquer commit n
 
 Antes de mexer no `order-service`, replicar o `saga-temporal/docker-compose.yml` deste PoC no ambiente de dev local. Adicionar ao `docker-compose.override.yml` do `order-service`:
 
-> ⚠️ **Achado decisivo:** Temporal **NÃO suporta MariaDB**. Tentativa com `mariadb:11.4` + driver `mysql8` falhou em migration de schema do auto-setup (CREATE INDEX com path JSON usa sintaxe MySQL 8 incompatível). Como esta aplicação Laravel usa MariaDB em produção, **adoção de Temporal exige um 2º SGBD dedicado** ao engine — o banco do `order-service` continua MariaDB; o do Temporal precisa ser PostgreSQL ou MySQL 8. Esse custo operacional (DBA, backup, monitoring de outro engine) está registrado em `findings-temporal.md` §2.2.6 e é **fortemente negativo para a adoção de Temporal**.
+> ⚠️ **Achado relevante (revisado):** Temporal **não suporta MariaDB**. Tentativa com `mariadb:11.4` + driver `mysql8` falhou em migration de schema do auto-setup (CREATE INDEX com path JSON usa sintaxe MySQL 8 incompatível). Como esta aplicação Laravel usa MariaDB em produção, adoção de Temporal exige um SGBD adicional dedicado ao engine — o banco do `order-service` continua MariaDB; o do Temporal precisa ser **MySQL 8** (preferido — mesma família, time mantém familiaridade) ou Postgres. Custo revisado: ~3 dias eng inicial + ~$30-150/mês de RDS/Aurora MySQL 8 adicional. É um critério a mais na decisão, não bloqueador isolado. Detalhamento em `findings-temporal.md` §2.2.6.
 
 ```yaml
 services:

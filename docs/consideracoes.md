@@ -15,7 +15,7 @@
 > - **§3 (cruzamento)** atualizado com medições de throughput, memória, tempo de detecção de falha, profundidade de postmortem e cold start.
 > - **§4 NOVO** sobre alertas — implementação concreta do T2.2 enfraqueceu o argumento "Temporal entrega alertas grátis"; o que se mantém é "Temporal classifica `Failed` automaticamente para qualquer caminho de falha".
 > - **§5 NOVO** sobre custo de "memória de longo prazo" — T3.3 mostrou que Temporal acumula state durável em Postgres (~+311 MB sob 5 min de load) enquanto RabbitMQ é "transport ephemeral" (volta ao baseline). Não é leak — é o preço da observabilidade.
-> - **§2.2.6 NOVO em `findings-temporal.md`** — **Temporal não suporta MariaDB.** Cenários onde o SGBD principal já é MariaDB exigem um 2º SGBD dedicado (Postgres ou MySQL 8) só para o Temporal. Esse achado **pode pesar fortemente na decisão** mesmo com critérios qualitativos a favor de Temporal.
+> - **§2.2.6 em `findings-temporal.md` (revisado)** — Temporal não suporta MariaDB. Cenários onde o SGBD principal já é MariaDB exigem um SGBD adicional (preferencialmente **MySQL 8** via RDS/Aurora — Temporal suporta oficialmente e o time mantém familiaridade quase total). Custo revisado: ~3 dias eng inicial + ~$30-150/mês. Critério a mais na decisão, não bloqueador isolado.
 > - **§1.2.13 NOVO** sobre falta de health-check de storage — T4.2 mostrou que a lib RabbitMQ trata SQLite indisponível com falha silenciosa.
 > - **§1.2.14 NOVO** sobre falta de conceito de timeout — T4.4 mostrou que handler travado em RabbitMQ bloqueia consumer indefinidamente; Temporal classifica 4 tipos de timeout distintos.
 > - **§2.1.2 (durable execution)** reforçado com T4.1 — worker Temporal sobreviveu a 10s de network outage com 0 retries.
