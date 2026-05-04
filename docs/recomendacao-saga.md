@@ -277,7 +277,70 @@ Se durante a adoção qualquer um destes mudar, parar e revisar antes de continu
 
 ## 9. Resumo de uma frase
 
-A primeira iteração do estudo, sobre **modelos orquestrados**, recomenda **Temporal**. Uma segunda iteração trouxe coreografia para a comparação, e a recomendação final precisa ser uma **árvore de decisão** orquestração ⇄ coreografia, não uma escolha única de ferramenta. Detalhes na próxima seção.
+A primeira iteração do estudo, sobre **modelos orquestrados**, recomenda **Temporal**. Uma segunda iteração trouxe coreografia para a comparação, e a recomendação final precisa ser uma **árvore de decisão** orquestração ⇄ coreografia, não uma escolha única de ferramenta. Detalhes na §9.1.
+
+## 9.1 Árvore de decisão por cenário (NOVO — 2026-05-04)
+
+A escolha "RabbitMQ orquestrado vs RabbitMQ coreografado vs Temporal vs Step Functions" depende fortemente do contexto. Esta seção enumera cenários comuns e indica qual modelo+ferramenta é tipicamente preferido.
+
+### 9.1.1 Por característica do fluxo
+
+| Característica do fluxo                                          | Recomendação                  | Justificativa                                                                                                  |
+| ---------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Fluxo curto (≤ 3 steps), poucos serviços (≤ 2)**               | RabbitMQ coreografado         | Custo de DX baixo (cadeia de eventos cabe na cabeça); ganho de latência (~2× vs orquestrado).                 |
+| **Fluxo médio (4-7 steps), múltiplos serviços (3-5)**            | Empate Temporal / orquestrado | Coreografia começa a perder em DX (cadeia de eventos vira grafo); orquestração centralizada vence em revisão. |
+| **Fluxo longo (8+ steps) ou aninhado (sub-sagas)**               | **Temporal**                  | Workflow code centralizado é a única forma sã de manter; coreografia vira spaghetti.                          |
+| **Fluxo com decisões condicionais complexas**                    | **Temporal** ou Step Functions | Branching/loops são primeira-classe; em coreografia exige máquina de estado implícita por evento.             |
+| **Fluxo curtíssimo (1-2 steps) e quase sempre síncrono**         | **Não usar SAGA**             | HTTP request síncrono + idempotência local resolve. SAGA é overhead.                                          |
+
+### 9.1.2 Por característica não-funcional
+
+| Requisito                                                        | Recomendação                  | Justificativa                                                                                                  |
+| ---------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **SLO de latência p99 < 50ms**                                   | RabbitMQ (qualquer modelo)    | Temporal p99=351ms está fora do envelope; Step Functions é pior ainda (p99=2092ms em LocalStack).            |
+| **Compliance / audit trail estrito**                             | **Temporal**                  | Audit trail nativo, replay determinístico, retention configurável. RabbitMQ exige construir.                  |
+| **Sagas em voo durante deploy frequentes**                       | **Temporal** ou Step Functions | Versionamento explícito; RabbitMQ orquestrado tem T5.1 (silent corruption).                                   |
+| **Throughput burst alto sustentado (1000+ sagas/s)**             | RabbitMQ coreografado         | ~94 sagas/s sequencial; coreografia distribui carga sem coordenador central como gargalo.                    |
+| **Volume baixo (≤ 100 sagas/min)**                               | Qualquer um — escolher por DX | Throughput não é decisor; outros critérios pesam mais.                                                        |
+| **Volume muito alto (10k+ sagas/s sustentados)**                 | **Temporal com Cassandra**    | Único combo que escala horizontalmente sem reengineering; mas custo operacional alto.                         |
+
+### 9.1.3 Por característica do time
+
+| Característica                                                   | Recomendação                  | Justificativa                                                                                                  |
+| ---------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Time pequeno (≤ 5 devs)**                                      | Empate orquestrado / Temporal | Coreografia exige discipline de eventos; com time pequeno qualquer disciplina vira gargalo de uma pessoa.    |
+| **Time médio (6-15 devs), múltiplos squads**                     | RabbitMQ coreografado         | Cada squad opera seu serviço; coreografia maximiza desacoplamento; sem orquestrador central como gargalo.     |
+| **Time grande (15+ devs) com tooling maduro**                    | **Temporal**                  | Investimento em determinismo/lib interna se amortiza; observabilidade out-of-the-box vence custo de aprendizado. |
+| **Time sem expertise prévia em filas/event-driven**              | **Temporal Cloud**            | Curva de RabbitMQ + lib interna é maior que aprender Temporal. Cloud abstrai operação.                        |
+| **Time AWS-native, com expertise Step Functions**                | **Step Functions**            | Re-aproveitar conhecimento existente vence ganho marginal de outros.                                          |
+
+### 9.1.4 Por característica de infraestrutura
+
+| Característica                                                   | Recomendação                  | Justificativa                                                                                                  |
+| ---------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Stack monolítica em MariaDB/MySQL**                            | RabbitMQ (qualquer modelo)    | Reusa banco existente; Temporal exige 2º SGBD (achado §2.2.6 em `findings-temporal.md`).                      |
+| **Stack já em Postgres**                                         | Empate Temporal / RabbitMQ    | Sem custo de SGBD adicional; decisão por outros eixos.                                                        |
+| **Multi-DC ativo-ativo obrigatório**                             | Temporal com Cassandra        | Único combo com primitivas multi-DC nativas.                                                                   |
+| **Sem capacidade SRE para operar Postgres+ES self-hosted**       | **Temporal Cloud**            | Cloud absorve operação. Custo financeiro vira aceitável pelo zero-overhead operacional.                       |
+| **Budget cloud apertado**                                        | RabbitMQ self-hosted          | ~$2.4-4.8k/12 meses vs ~$58k/ano de Temporal Cloud em escala.                                                 |
+| **Step Functions free tier suficiente (≤ 4k transições/mês)**    | **Step Functions**            | Custo zero até esse limite; cobrança previsível; lock-in AWS aceitável se já é stack AWS.                     |
+
+### 9.1.5 Anti-padrões — quando NÃO usar a recomendação principal
+
+- **Não use RabbitMQ orquestrado** se há mudanças frequentes na ordem dos steps. T5.1 (silent corruption) é um risco silencioso e cumulativo.
+- **Não use coreografia** se o fluxo cresce além de 5-6 steps sem fronteira clara entre serviços. Vira spaghetti.
+- **Não use Temporal** se p99 < 60ms é requisito real do produto. O engine adiciona ~40ms baseline.
+- **Não use Step Functions** se você não está em AWS ou planeja sair. Lock-in é profundo (ASL, IAM, ARNs, CloudWatch).
+- **Não use Cassandra** como escolha de SGBD para Temporal "porque é NoSQL". É o mais complexo de operar do trio suportado; só justifica em escala extrema (10k+ workflows/s, multi-DC).
+
+### 9.1.6 Como navegar a árvore
+
+1. **Pergunte primeiro:** "preciso mesmo de SAGA?" Se for fluxo curto e quase sempre síncrono, idempotência local + retry resolve.
+2. **Filtro por SLO de latência.** Se p99 < 50ms é requisito, Temporal sai.
+3. **Filtro por SGBD.** Se a stack é MariaDB e adicionar Postgres/MySQL é deal-breaker, Temporal sai (ou vai pra Cloud).
+4. **Filtro por escala de fluxo.** Steps ≤ 3 → coreografia ganha; ≥ 8 → Temporal ganha; entre 4-7, decidir por outros critérios.
+5. **Filtro por time/governance.** Compliance estrito → Temporal. Time pequeno + DX simples → orquestrado em RabbitMQ. Múltiplos squads → coreografia.
+6. **Decisor final:** custos 12 meses (ver §9 de `consideracoes.md` — TCO em 3 cenários). Faz a conta.
 
 ---
 

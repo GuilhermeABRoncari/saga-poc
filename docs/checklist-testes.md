@@ -289,7 +289,7 @@
     - cada worker: ~64 → ~110-128 MB (+50 MB cada × 3 workers = +150 MB)
     - Total stack: 439 → ~750 MB (**+311 MB durante load**)
   - **Não voltou para baseline em 5 min após load ended** (não esperado, mas não testado por mais tempo)
-  - **Veredito: não é leak; é storage de history events (feature, não bug)**. Postgres acumula porque retention default é 7 dias para Completed. Em produção, lifecycle policy do Temporal limpa.
+  - **Veredito: não é leak; é storage de history events (feature, não bug)**. Postgres acumula porque há retention configurada para Completed. **Retention default do `auto-setup`: 24h** (verificado em 2026-05-04 via `tctl namespace describe default`), não 7 dias como afirmações anteriores deste doc sugeriam. Em produção, lifecycle policy do Temporal limpa após o período configurado.
 - **Comparação:**
   | | RabbitMQ | Temporal |
   |---|---|---|
@@ -568,10 +568,12 @@
 - [x] **Executado.**
 - **Como executou:** scripts `bin/p99-bench.php` em ambos PoCs disparam 1000 sagas SEQUENCIAIS (uma após a outra completar) e capturam latência fim-a-fim por saga. Calculam p50/p95/p99/max.
 - **Pré-condição:** habilitado `PRAGMA busy_timeout=5000` + `journal_mode=WAL` na lib RabbitMQ (mudança de ~2 LOC) para evitar deadlocks SQLite entre orchestrator daemon e bench script. Sem isso, exception "database is locked" matava o bench após poucas iterações.
-- **Resultado RabbitMQ:**
-  - n=1000, **p50=21.3ms p95=21.8ms p99=22.1ms max=25.2ms avg=21.4ms**
-  - Tempo total: 21.5s (~46 sagas/s sequencial)
-  - Distribuição extremamente tight: max é apenas 4ms acima de p50.
+- **Resultado RabbitMQ 4.3 (re-medido 2026-05-04):**
+  - n=1000, **p50=21.8ms p95=22.6ms p99=23.8ms max=42.2ms avg=21.9ms**
+  - Tempo total: ~22s (~46 sagas/s sequencial)
+  - Distribuição apertada: max é ~20ms acima de p50 (vs 4ms em 3.13 — Khepri introduziu ligeiro tail mais alto sem alterar p50/p99 mensuravelmente).
+  - **Comparação 3.13 → 4.3:** p50 21.3 → 21.8ms (+2%), p99 22.1 → 23.8ms (+8%), max 25.2 → 42.2ms (+67%). Khepri **não alterou** latência sequencial single-saga de forma significativa; ganhos do 4.3 ficaram em **burst** (T1.3: 48 → 142 sagas/s) e **footprint** (T3.2: 141 → 108 MiB), não em latência sequencial. Tail máximo cresceu, mas continua ordens de grandeza menor que Temporal.
+  - Histórico (RabbitMQ 3.13): p50=21.3ms p95=21.8ms p99=22.1ms max=25.2ms avg=21.4ms.
 - **Resultado Temporal:**
   - n=1000, **p50=59.9ms p95=349.8ms p99=351.2ms max=356.0ms avg=134.8ms**
   - Tempo total: 135s (~7.4 workflows/s sequencial)
@@ -579,11 +581,11 @@
 - **Comparação direta:**
   | Métrica | RabbitMQ | Temporal | Diferença |
   |---|---|---|---|
-  | p50 | 21.3ms | 59.9ms | **2.8x** mais lento |
-  | p95 | 21.8ms | 349.8ms | **16x** mais lento |
-  | p99 | 22.1ms | 351.2ms | **16x** mais lento |
+  | p50 | 21.8ms (4.3) | 59.9ms | **2.7x** mais lento |
+  | p95 | 22.6ms (4.3) | 349.8ms | **15x** mais lento |
+  | p99 | 23.8ms (4.3) | 351.2ms | **15x** mais lento |
   | Throughput sequencial | 46/s | 7.4/s | **6.2x** menor |
-  | Variância | mínima (Δ4ms) | alta (Δ290ms) | RabbitMQ mais previsível |
+  | Variância | apertada (Δ20ms em 4.3, Δ4ms em 3.13) | alta (Δ290ms) | RabbitMQ mais previsível |
 - **Análise:**
   - **RabbitMQ:** o "happy path" é direto: trigger → publish → consume → handler → publish event → orchestrator handle → publish next → repeat. Cada salto é local, sem rede externa. ~21ms é dominado por 3 publish + 3 consume + SQLite UPDATEs.
   - **Temporal:** cada workflow tem overhead de gRPC roundtrip ao server + decision tasks + history persistence em Postgres + activity scheduling. ~60ms é o "preço da plataforma" no caso normal; ~350ms aparece quando há latência de processamento de decision task (worker pool não está pronto, batching de eventos).

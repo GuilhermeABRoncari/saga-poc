@@ -204,6 +204,31 @@ A partir do 4.0, **classic mirrored queues foram removidas** do produto. Para HA
 
 **Impacto na estimativa de adoção:** a lista de débitos pré-produção em `consideracoes.md` ganha um item — _redesenhar declaração de filas para quorum_, com testes específicos de redelivery sob falha de líder Raft. Custo: ~2-3 dias.
 
+### 7.2 Resultados empíricos com quorum queues (NOVO — 2026-05-04)
+
+A lib `AmqpTransport` foi estendida com flag `QUEUE_TYPE=quorum` para declarar queues como `x-queue-type=quorum`. Re-rodamos os testes-chave em **single-node** (não multi-node — fora do escopo da PoC):
+
+| Métrica                                   | Classic durable | Quorum         | Δ                              |
+| ----------------------------------------- | --------------- | -------------- | ------------------------------ |
+| RAM idle do broker (T3.2)                 | 108 MiB         | 103 MiB        | -5 MiB (paridade)              |
+| T1.3 burst 100 sagas (tempo total)        | 705 ms          | 934 ms         | **+32%** mais lento            |
+| T1.3 burst (sagas/s)                      | 142/s           | 107/s          | **-25%** throughput            |
+| T6.2 sequencial p99                       | 23.8 ms         | 23.2 ms        | paridade                       |
+| T6.2 sequencial p50                       | 21.8 ms         | 21.6 ms        | paridade                       |
+| T1.4 broker kill — comportamento da lib   | workers crash   | workers crash  | **idêntico** (gap continua)    |
+
+**Análise:**
+
+- **Burst:** quorum paga 25% de overhead em throughput por causa do consenso Raft em cada `basic_publish` (mesmo em single-node, o Raft ainda persiste no WAL).
+- **Latência sequencial:** sem diferença — uma única saga não estressa o consenso paralelo.
+- **T1.4:** o gap "workers `php-amqplib` não auto-reconectam" **não é mitigado por quorum**. Quorum entrega benefício no lado **server** (replicação Raft, failover de líder em multi-node). O lado **client** continua igual: connection cai, lib não reconnecta, workers viram zumbis.
+
+**Implicação prática:**
+
+- Em **single-node** (dev local e PoC), quorum custa 25% de throughput sem retorno real. Preferir classic durable.
+- Em **multi-node cluster de produção**, quorum é obrigatório (mirrored foi removido em 4.0) e o overhead vira aceitável diante do ganho de HA.
+- O custo de adoção real de quorum é: **~25% throughput perdido + redesign de declaração de filas + testes de failover de líder + reconnect na lib (ainda pendente independentemente de quorum)**. Não é zero, mas é único caminho suportado para HA em 4.x.
+
 ---
 
 ## 8. Custo projetado 12 meses

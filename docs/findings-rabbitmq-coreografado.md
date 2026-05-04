@@ -143,6 +143,30 @@ Testes executados contra a versão corrigida da lib (com `step_log`):
 - **Resultado:** 100 step_log em A, 100 step_log em B, 100 `saga.completed` events publicados.
 - **Veredito:** RabbitMQ topic exchange + 1 consumer por queue lida bem com concorrência. Latência total inferior à orquestrada (sem hop pra orquestrador).
 
+### T1.3 estendido — 3000 sagas batch (re-medido 2026-05-04)
+
+- Publicadas 3000 sagas via `bin/batch-trigger.php` (publish-only completou em 0.09s, ~34k msgs/s lado fire).
+- Processamento end-to-end de 3000 completou em ~3 min sustentados; 0 falhas.
+- Footprint do broker durante load: estabilizou em ~102 MiB (baixou de 110 MiB idle — Khepri compacta sob escrita).
+- Serviços cresceram apenas ~1 MiB cada durante o load.
+
+### T6.2 — Latência sequencial p99 (NOVO em 2026-05-04)
+
+- 1000 sagas sequenciais (uma após a próxima completar) via `bin/p99-bench.php` (criado nesta iteração).
+- **Resultado: n=1000, p50=10.2ms p95=13.2ms p99=20.4ms max=40.5ms avg=10.6ms.**
+- **Throughput sequencial:** ~94 sagas/s (~2× mais rápido que orquestrado, ~13× mais rápido que Temporal).
+
+| Métrica | Coreografado (4.3) | Orquestrado (4.3) | Temporal (Postgres) |
+| ------- | ------------------ | ------------------ | ------------------- |
+| p50     | **10.2 ms**        | 21.8 ms            | 59.9 ms             |
+| p99     | **20.4 ms**        | 23.8 ms            | 351.2 ms            |
+| max     | 40.5 ms            | 42.2 ms            | 356.0 ms            |
+| Throughput sequencial | **~94/s** | ~46/s            | ~7.4/s              |
+
+**Por que coreografado vence em latência sequencial:** o caminho fim-a-fim tem **menos hops**. Orquestrado: `service-a → orchestrator → service-b → orchestrator → service-a` (5 hops). Coreografado: `service-a → service-b → service-a` (3 hops, sem coordenador central). Cada hop poupado economiza 1 publish + 1 consume + 1 UPDATE SQLite.
+
+**Caveat:** essa vantagem **não compensa o custo de DX e observabilidade** documentado em §3.1 da `consideracoes.md` e em §3 abaixo. É um trade-off explícito — coreografia é mais rápida individualmente mas mais cara para entender em conjunto.
+
 ### T-novo: persistência de fila (handler offline durante saga)
 - service-b parado antes do trigger.
 - service-a publica `stock.reserved` → fica enfileirado em `service-b.saga` (1 msg, 0 consumers).

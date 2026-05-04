@@ -7,20 +7,30 @@ namespace Mobilestock\Saga;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
+use PhpAmqpLib\Wire\AMQPTable;
 
 final class AmqpTransport
 {
     private AMQPStreamConnection $conn;
     private AMQPChannel $channel;
+    private bool $useQuorum;
 
     public function __construct(string $host, int $port, string $user, string $pass)
     {
         $this->conn = new AMQPStreamConnection($host, $port, $user, $pass);
         $this->channel = $this->conn->channel();
+        // Quorum queues a partir de RabbitMQ 4.x — em 3.x classic mirrored era opção,
+        // mas a partir de 4.0 mirrored foi removido e quorum é o caminho oficial para HA.
+        $this->useQuorum = ($_ENV['QUEUE_TYPE'] ?? 'classic') === 'quorum';
     }
 
     public function declareQueue(string $queue): void
     {
+        if ($this->useQuorum) {
+            $args = new AMQPTable(['x-queue-type' => 'quorum']);
+            $this->channel->queue_declare($queue, false, true, false, false, false, $args);
+            return;
+        }
         $this->channel->queue_declare($queue, false, true, false, false);
     }
 

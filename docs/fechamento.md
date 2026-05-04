@@ -233,6 +233,24 @@ Se aparecer caso pontual de SAGA que **não justifica adotar plataforma nova** (
 
 ---
 
+## 6.1 Decisão sobre uma 5ª PoC: Temporal-coreografado (descartada)
+
+Foi cogitado construir uma 5ª PoC simulando coreografia em Temporal — workers reagindo a `signals` em vez de um workflow orquestrador central — para fechar a matriz de comparação ortogonal (orquestrado/coreografado × ferramenta).
+
+**Decisão: não construir.** Motivos:
+
+1. **Não é caso de uso recomendado pelo próprio Temporal.** Signals existem para input externo num workflow em curso, não para implementar coreografia distribuída. Construir a PoC desse jeito seria forçar a ferramenta para fora do design intent.
+2. **Não responde nenhuma pergunta nova.** Já temos: orquestração em Temporal (PoC oficial), coreografia em RabbitMQ (4ª PoC). Coreografia em Temporal não acrescenta evidência relevante porque o ganho da coreografia (ausência de orquestrador central, acoplamento mínimo, baixo footprint) **se opõe diretamente** ao ganho de Temporal (engine central com durable execution, audit trail, replay determinístico).
+3. **Custo de oportunidade.** Cada dia gasto numa 5ª PoC poderia ir para refinar o que já temos — completar Tier 1-6 do coreografado, construir Saga Aggregator real, validar quorum queues em produção real.
+
+**Quando reabrir essa decisão:**
+- Se o estudo ganhar tração externa e alguém pedir comparação completa "ortogonal".
+- Se Temporal lançar primitiva oficial para coreografia (improvável, vai contra o produto).
+
+Por ora, a matriz fica registrada como **3 ferramentas × 2 modelos = 4 combinações testadas** (orquestrado em RabbitMQ/Temporal/Step Functions + coreografado em RabbitMQ). A combinação faltante (coreografado em Step Functions) também é descartada pelo mesmo argumento — Step Functions é orquestrador puro, sem semântica natural de coreografia.
+
+---
+
 ## 7. Arquivos relacionados
 
 - [`glossario.md`](./glossario.md) — sumário de siglas e termos do estudo.

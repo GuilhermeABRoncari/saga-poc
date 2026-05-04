@@ -17,6 +17,7 @@ services:
         condition: service_healthy
     environment:
       AMQP_HOST: rabbitmq
+      QUEUE_TYPE: ${QUEUE_TYPE:-classic}
       AMQP_PORT: 5672
       AMQP_USER: guest
       AMQP_PASS: guest
@@ -34,6 +35,7 @@ services:
         condition: service_healthy
     environment:
       AMQP_HOST: rabbitmq
+      QUEUE_TYPE: ${QUEUE_TYPE:-classic}
       SERVICE_NAME: service-a
       FORCE_FAIL: ${FORCE_FAIL:-}
       SLOW_RESERVE_STOCK: ${SLOW_RESERVE_STOCK:-0}
@@ -47,6 +49,7 @@ services:
         condition: service_healthy
     environment:
       AMQP_HOST: rabbitmq
+      QUEUE_TYPE: ${QUEUE_TYPE:-classic}
       SERVICE_NAME: service-b
       FAIL_COMPENSATION: ${FAIL_COMPENSATION:-}
       SLOW_COMPENSATION: ${SLOW_COMPENSATION:-0}

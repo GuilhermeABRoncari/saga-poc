@@ -23,7 +23,18 @@
 >
 > **Custo revisado da incompatibilidade** (assumindo MySQL 8 como escolha): **~3 dias eng inicial + ~$30-150/mês de RDS/Aurora MySQL 8 adicional + zero custo recorrente de skill set**. É um item quantificável de TCO, não um deal-breaker.
 >
-> **Conclusão:** este achado é **um critério a mais** na matriz de decisão — não bloqueador isolado. A PoC continua rodando em Postgres apenas para preservar comparabilidade dos números medidos (T1.4, T3.3, contagem de INSERTs). Detalhamento completo em §2.2.6.
+> ### Validação empírica (2026-05-04) — MySQL 8 confirmado funcional
+>
+> Subimos `mysql:8.0` em paralelo via `saga-temporal/docker-compose.mysql.yml` e validamos:
+>
+> - **Schema migration completou** até versão 1.14 (mesmo ponto onde MariaDB 11.4 falhava em 1.14→1.15). Multi-Valued Indexes funcionam em MySQL 8 nativamente.
+> - **Smoke test happy path:** workflow `cfcb2c7d` COMPLETED com `reservation_id`, `charge_id`, `tracking_code` propagados.
+> - **Smoke test compensação (`FORCE_FAIL=step3`):** workflow `24d4215c` COMPENSATED com LIFO automático após `confirmShipping` esgotar retries.
+> - **Tabelas criadas** (mesmo schema de Postgres): `executions`, `current_executions`, `history_node`, `history_tree`, `timer_tasks`, `transfer_tasks`, `visibility_tasks`, `task_queues`, `nexus_endpoints` etc.
+>
+> **Achado adicional — footprint de MySQL 8 vs Postgres:** MySQL 8 idle ficou em **~457 MiB**, vs **~143 MiB** do `postgres:16-alpine` (medido em T3.2). MySQL 8 é **~3× mais pesado em RAM idle** que Postgres na mesma carga. Em RDS/Aurora não muda nada em termos de custo financeiro (você paga por instância, não por uso de RAM dentro dela), mas em **dev local** isso é overhead real que afeta máquinas de devs com RAM limitada. Vale documentar como item secundário do trade-off MySQL 8 × Postgres.
+>
+> **Conclusão:** este achado é **um critério a mais** na matriz de decisão — não bloqueador isolado. MySQL 8 está validado como caminho viável; a escolha entre MySQL 8 (familiaridade do time) e Postgres (RAM mais leve em dev local) vira detalhe operacional, não impedimento. A PoC continua rodando em Postgres por default para preservar comparabilidade dos números medidos (T1.4, T3.3, contagem de INSERTs). Detalhamento completo em §2.2.6.
 
 PoC vivo: [`../saga-temporal/`](../saga-temporal/).
 
@@ -245,6 +256,26 @@ O ambiente alvo deste estudo usa **MariaDB** como banco principal dos serviços.
 
 **Implicação direta:** adotar Temporal exige provisionar **um SGBD adicional** dedicado ao engine. Esse banco fica separado dos bancos de aplicação (que continuam MariaDB).
 
+### Validação empírica do MySQL 8 (2026-05-04)
+
+Antes da análise comparativa, confirmamos empiricamente que MySQL 8 funciona com Temporal sem nenhuma adaptação na PoC. Configuração testada em `saga-temporal/docker-compose.mysql.yml`:
+
+- Imagem: `mysql:8.0` + Temporal `auto-setup:1.26` com driver `mysql8`.
+- Schema migration **completa** até versão 1.14 (mesma versão onde MariaDB 11.4 falhava em 1.14→1.15 — exatamente os Multi-Valued Indexes que MariaDB não implementa).
+- **Smoke test happy path:** workflow `cfcb2c7d` COMPLETED com payload propagado.
+- **Smoke test compensação:** workflow `24d4215c` COMPENSATED com LIFO automático após `confirmShipping` esgotar retries.
+- 36 tabelas criadas (idêntico ao Postgres) — `executions`, `history_node`, `task_queues`, `nexus_endpoints` etc.
+
+**Achado adicional — footprint de RAM:**
+
+| Banco                 | RAM idle observada | Δ vs Postgres |
+| --------------------- | ------------------ | ------------- |
+| `postgres:16-alpine`  | ~143 MiB           | baseline      |
+| `mysql:8.0`           | ~457 MiB           | **+220% (~3×)** |
+| `mariadb:11.4`        | ~94 MiB            | -34%          |
+
+MySQL 8 é cerca de 3× mais pesado em RAM idle que Postgres. Em **RDS/Aurora isso não afeta o custo financeiro** (paga-se por classe de instância, não pela RAM consumida dentro dela), mas em **dev local** o overhead é real para máquinas de devs com pouca RAM. É item secundário do trade-off MySQL 8 × Postgres, não decisor.
+
 ### Opções de SGBD para o engine — análise comparativa
 
 A escolha de SGBD afeta custo, complexidade operacional e familiaridade. A análise abaixo considera workload realista (poucas dezenas a centenas de sagas/min) em ambiente AWS:
@@ -315,7 +346,8 @@ Pontos abertos para discussão posterior:
 
 - Confirmar se RDS/Aurora MySQL 8 é mesmo aceitável pelo time de plataforma (alinhamento com decisões de roadmap de DB).
 - Quantificar custo financeiro mais precisamente para a instância escolhida (depende de retention de history events).
-- Validar que dev local com `mysql:8` ao lado de `mariadb:11.4` não introduz fricção de fluxo nos devs.
+- Validar que dev local com `mysql:8` ao lado de `mariadb:11.4` não introduz fricção de fluxo nos devs (atenção ao footprint ~457 MiB do MySQL 8 vs ~94 MiB do MariaDB — em máquinas modestas pode somar).
+- Re-medir T1.4, T3.3 e contagem de INSERTs em MySQL 8 (PoC continua com Postgres por default; números atuais são de Postgres).
 
 ---
 
