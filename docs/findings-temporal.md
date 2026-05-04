@@ -213,30 +213,32 @@ Empate qualitativo. Temporal vence em primeira leitura, RabbitMQ vence em "como 
 
 ## 7. Operação simulada
 
-| Aspecto                | Observação                                                                                                             |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Setup local            | `docker compose up --build -d` no primeiro run leva ~25 min (PECL grpc compile)                                        |
+| Aspecto                | Observação                                                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Setup local            | `docker compose up --build -d` no primeiro run leva ~25 min (PECL grpc compile)                                                   |
 | Containers em produção | Temporal: 4 serviços (Frontend/History/Matching/Worker) + Postgres ou MySQL 8 (**não MariaDB** — §2.2.6) + opcional Elasticsearch |
-| Cloud option           | Temporal Cloud Free → Essentials ($100/mês) → Growth ($200/mês) → custo escala com actions                             |
-| Self-host EKS          | Helm chart oficial + Aurora Postgres ou Aurora MySQL + opcional OpenSearch                                             |
-| Self-host Swarm        | **Não suportado oficialmente** — viável só Cloud em ambiente Swarm                                                     |
-| Healthcheck            | Resolvido com `tctl cluster health` no service temporal + `depends_on: condition: service_healthy` nos workers/alerter |
-| Logs                   | Pelo SDK PHP, via stdout do worker — fácil de integrar com qualquer log aggregator                                     |
+| Cloud option           | Temporal Cloud Free → Essentials ($100/mês) → Growth ($200/mês) → custo escala com actions                                        |
+| Self-host EKS          | Helm chart oficial + Aurora Postgres ou Aurora MySQL + opcional OpenSearch                                                        |
+| Self-host Swarm        | **Não suportado oficialmente** — viável só Cloud em ambiente Swarm                                                                |
+| Healthcheck            | Resolvido com `tctl cluster health` no service temporal + `depends_on: condition: service_healthy` nos workers/alerter            |
+| Logs                   | Pelo SDK PHP, via stdout do worker — fácil de integrar com qualquer log aggregator                                                |
 
 ### 7.1 Volume de escritas no banco — medido em 2026-04-30
 
 Critério levantado após observar 31+ inserções por workflow em `laravel-workflow`. Medição direta no Postgres do `saga-temporal` (1 saga isolada, contagem antes/depois em todas as tabelas):
 
-| Cenário              | INSERTs por saga | Detalhamento                                                                                          |
-| -------------------- | ---------------- | ----------------------------------------------------------------------------------------------------- |
-| Happy-path (3 steps) | **38**           | history_node +12, history_tree +1, executions +1, current_executions +1, timer_tasks +12, transfer_tasks +8, visibility_tasks +3 |
-| Com compensação (FORCE_FAIL=step3) | **53** | Sobe principalmente em history_node (+18 — retries antes de MAXIMUM_ATTEMPTS_REACHED + compensações) e tasks |
+| Cenário                            | INSERTs por saga | Detalhamento                                                                                                                     |
+| ---------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Happy-path (3 steps)               | **38**           | history_node +12, history_tree +1, executions +1, current_executions +1, timer_tasks +12, transfer_tasks +8, visibility_tasks +3 |
+| Com compensação (FORCE_FAIL=step3) | **53**           | Sobe principalmente em history_node (+18 — retries antes de MAXIMUM_ATTEMPTS_REACHED + compensações) e tasks                     |
 
 **Comparação:**
+
 - RabbitMQ-orquestrado (`saga-rabbitmq/`): **1 INSERT + 4 UPDATEs** por saga.
 - RabbitMQ-coreografado (`saga-rabbitmq-coreografado/`): **0 happy / 2 com compensação**.
 
 **Em escala de produção** (múltiplos serviços × ~1k-10k sagas/dia = 4k-40k sagas/dia):
+
 - Temporal: **152k-2.1M INSERTs/dia** só de metadados.
 - Cada retry de Activity adiciona eventos — uma saga que demora pra falhar pode ter 100+ rows em `history_node`.
 - Custo Cloud: Cloud cobra por action; cada evento conta. Em volume alto, agrava o custo de $58k/ano em escala já documentado.
@@ -268,11 +270,11 @@ Antes da análise comparativa, confirmamos empiricamente que MySQL 8 funciona co
 
 **Achado adicional — footprint de RAM:**
 
-| Banco                 | RAM idle observada | Δ vs Postgres |
-| --------------------- | ------------------ | ------------- |
-| `postgres:16-alpine`  | ~143 MiB           | baseline      |
-| `mysql:8.0`           | ~457 MiB           | **+220% (~3×)** |
-| `mariadb:11.4`        | ~94 MiB            | -34%          |
+| Banco                | RAM idle observada | Δ vs Postgres   |
+| -------------------- | ------------------ | --------------- |
+| `postgres:16-alpine` | ~143 MiB           | baseline        |
+| `mysql:8.0`          | ~457 MiB           | **+220% (~3×)** |
+| `mariadb:11.4`       | ~94 MiB            | -34%            |
 
 MySQL 8 é cerca de 3× mais pesado em RAM idle que Postgres. Em **RDS/Aurora isso não afeta o custo financeiro** (paga-se por classe de instância, não pela RAM consumida dentro dela), mas em **dev local** o overhead é real para máquinas de devs com pouca RAM. É item secundário do trade-off MySQL 8 × Postgres, não decisor.
 
@@ -280,13 +282,13 @@ MySQL 8 é cerca de 3× mais pesado em RAM idle que Postgres. Em **RDS/Aurora is
 
 A escolha de SGBD afeta custo, complexidade operacional e familiaridade. A análise abaixo considera workload realista (poucas dezenas a centenas de sagas/min) em ambiente AWS:
 
-| Opção                                          | Custo/mês estimado          | Operação                                                          | Familiaridade do time | Adequação ao caso |
-| ---------------------------------------------- | --------------------------- | ----------------------------------------------------------------- | --------------------- | ----------------- |
-| **RDS MySQL 8 / Aurora MySQL** ⭐               | ~$30 (RDS small) a ~$150 (Aurora) | Mesma rotina dos RDS MariaDB existentes                          | Alta — MySQL é primo direto do MariaDB; queries, EXPLAIN, replicação são quase idênticos | **Recomendada** |
-| RDS Postgres / Aurora Postgres                  | ~$30 a ~$150                | Console e backups idênticos ao RDS, mas internals diferentes (vacuum, lock-modes, EXPLAIN ANALYZE) | Curva real — VACUUM/autovacuum, MVCC mais explícito, dialeto SQL com diferenças (`RETURNING`, `JSONB`, sequences) | Viável, custo de aprendizado mais alto |
-| Supabase / Neon / outro Postgres externo       | $25 base + uso + egress     | Console externo; backups do provedor; dados fora do VPC          | Mesma curva do Postgres | **Não recomendada** — fora do VPC implica latência (5-50ms vs <1ms), egress AWS ($0.09/GB), e questões de compliance |
-| Cassandra (Keyspaces ou DataStax Astra)        | $0.085/GB/mês storage + $1.45/M reads/writes (Keyspaces) ou similar | Tuning de consistency levels, compaction strategies (STCS/LCS/TWCS), repair sessions, tombstone management; schema query-first | **Nenhuma** no time | **Não recomendada** — overkill para o volume; Cassandra faz sentido só em escala muito alta (10k+ workflows/s sustentados) ou multi-DC ativo-ativo |
-| Self-hosted Postgres/MySQL em EC2/EKS          | Hardware barato             | Alto custo operacional (patching, backup, replicação manual)     | Depende                | Não recomendada quando há gerenciado disponível |
+| Opção                                    | Custo/mês estimado                                                  | Operação                                                                                                                       | Familiaridade do time                                                                                             | Adequação ao caso                                                                                                                                  |
+| ---------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **RDS MySQL 8 / Aurora MySQL** ⭐        | ~$30 (RDS small) a ~$150 (Aurora)                                   | Mesma rotina dos RDS MariaDB existentes                                                                                        | Alta — MySQL é primo direto do MariaDB; queries, EXPLAIN, replicação são quase idênticos                          | **Recomendada**                                                                                                                                    |
+| RDS Postgres / Aurora Postgres           | ~$30 a ~$150                                                        | Console e backups idênticos ao RDS, mas internals diferentes (vacuum, lock-modes, EXPLAIN ANALYZE)                             | Curva real — VACUUM/autovacuum, MVCC mais explícito, dialeto SQL com diferenças (`RETURNING`, `JSONB`, sequences) | Viável, custo de aprendizado mais alto                                                                                                             |
+| Supabase / Neon / outro Postgres externo | $25 base + uso + egress                                             | Console externo; backups do provedor; dados fora do VPC                                                                        | Mesma curva do Postgres                                                                                           | **Não recomendada** — fora do VPC implica latência (5-50ms vs <1ms), egress AWS ($0.09/GB), e questões de compliance                               |
+| Cassandra (Keyspaces ou DataStax Astra)  | $0.085/GB/mês storage + $1.45/M reads/writes (Keyspaces) ou similar | Tuning de consistency levels, compaction strategies (STCS/LCS/TWCS), repair sessions, tombstone management; schema query-first | **Nenhuma** no time                                                                                               | **Não recomendada** — overkill para o volume; Cassandra faz sentido só em escala muito alta (10k+ workflows/s sustentados) ou multi-DC ativo-ativo |
+| Self-hosted Postgres/MySQL em EC2/EKS    | Hardware barato                                                     | Alto custo operacional (patching, backup, replicação manual)                                                                   | Depende                                                                                                           | Não recomendada quando há gerenciado disponível                                                                                                    |
 
 **Por que MySQL 8 (Aurora ou RDS) é a escolha preferida:**
 
@@ -315,15 +317,15 @@ Tecnicamente funciona, mas estar **fora do VPC** introduz três custos não-óbv
 
 ### Custo de adoção revisado (com MySQL 8 escolhido)
 
-| Item                                                      | Custo                                       |
-| --------------------------------------------------------- | ------------------------------------------- |
-| Provisionar instância RDS MySQL 8 ou Aurora MySQL         | ~1 dia (mesma rotina das instâncias atuais) |
-| Configurar Temporal apontando para a nova instância       | ~0.5 dia                                    |
-| Adaptar dev local (`docker-compose` com `mysql:8`)        | ~0.5 dia                                    |
-| Runbook DR / monitoring / alertas                         | ~1 dia (reaproveitamento dos existentes)    |
-| **Total inicial**                                         | **~3 dias**                                 |
-| Operação recorrente                                       | Marginal — mesma rotina dos RDS atuais      |
-| Custo financeiro                                          | ~$30-150/mês de RDS/Aurora adicional        |
+| Item                                                | Custo                                       |
+| --------------------------------------------------- | ------------------------------------------- |
+| Provisionar instância RDS MySQL 8 ou Aurora MySQL   | ~1 dia (mesma rotina das instâncias atuais) |
+| Configurar Temporal apontando para a nova instância | ~0.5 dia                                    |
+| Adaptar dev local (`docker-compose` com `mysql:8`)  | ~0.5 dia                                    |
+| Runbook DR / monitoring / alertas                   | ~1 dia (reaproveitamento dos existentes)    |
+| **Total inicial**                                   | **~3 dias**                                 |
+| Operação recorrente                                 | Marginal — mesma rotina dos RDS atuais      |
+| Custo financeiro                                    | ~$30-150/mês de RDS/Aurora adicional        |
 
 Comparado à versão original desta seção, o custo cai de "3-5 dias inicial + 0.5-1 dia/mês recorrente" para "**~3 dias inicial + zero recorrente extra**" — assumindo a escolha de MySQL 8.
 
@@ -390,27 +392,27 @@ Pontos abertos para discussão posterior:
 
 ## 10. Comparação direta com RabbitMQ (tabela final)
 
-| Critério                                   | RabbitMQ + lib interna             | Temporal                                       | Quem ganha                 |
-| ------------------------------------------ | ---------------------------------- | ---------------------------------------------- | -------------------------- |
-| LOC totais (PHP)                           | 632                                | 237                                            | **Temporal (-62%)**        |
-| LOC do orquestrador                        | 381 (lib em 6 arquivos)            | 77 (workflow em 1 arquivo)                     | **Temporal (-80%)**        |
-| Setup local 1ª vez                         | ~2 min                             | ~25 min (PECL grpc compile)                    | **RabbitMQ**               |
-| Composer deps                              | 3                                  | 3                                              | empate                     |
-| Containers                                 | 4                                  | 6                                              | **RabbitMQ** (marginal)    |
-| Cenário A (kill service mid-handler)       | via requeue                        | via timeout+retry                              | empate                     |
-| Cenário B (kill orchestrator mid-flight)   | via queue durable                  | via durable execution                          | empate                     |
-| Cenário C (at-least-once / execução dupla) | certeza sem idempotência           | exactly-once garantido                         | **Temporal**               |
-| Cenário D (saga órfã)                      | gap real (1-2 dias para fechar)    | não existe                                     | **Temporal**               |
-| Observabilidade default                    | logs + Mgmt UI básico              | timeline + replay + search                     | **Temporal**               |
-| Esforço para observabilidade aceitável     | 3-5 dias eng                       | ~1 dia                                         | **Temporal**               |
-| DX em code review (1ª leitura)             | saga em 3-4 arquivos               | saga em 1 arquivo                              | **Temporal**               |
-| DX em code review (manter)                 | PHP comum                          | exige lint para evitar bugs de determinismo    | **RabbitMQ**               |
-| Curva de aprendizado                       | baixa                              | semestre de calibração                         | **RabbitMQ**               |
-| Lock-in                                    | AMQP padrão aberto                 | moderado (OSS, mas API específica)             | **RabbitMQ**               |
-| Custo financeiro 12 meses                  | ~$2400-4800 + 12 dias eng          | ~$1200-2400 (Cloud)                            | **Temporal** (curto prazo) |
-| Operação self-host Swarm                   | viável                             | não suportado                                  | **RabbitMQ**               |
-| Operação EKS                               | Helm                               | Helm                                           | empate                     |
-| Bus factor                                 | lib interna                        | SDK público                                    | **Temporal**               |
+| Critério                                   | RabbitMQ + lib interna          | Temporal                                    | Quem ganha                 |
+| ------------------------------------------ | ------------------------------- | ------------------------------------------- | -------------------------- |
+| LOC totais (PHP)                           | 632                             | 237                                         | **Temporal (-62%)**        |
+| LOC do orquestrador                        | 381 (lib em 6 arquivos)         | 77 (workflow em 1 arquivo)                  | **Temporal (-80%)**        |
+| Setup local 1ª vez                         | ~2 min                          | ~25 min (PECL grpc compile)                 | **RabbitMQ**               |
+| Composer deps                              | 3                               | 3                                           | empate                     |
+| Containers                                 | 4                               | 6                                           | **RabbitMQ** (marginal)    |
+| Cenário A (kill service mid-handler)       | via requeue                     | via timeout+retry                           | empate                     |
+| Cenário B (kill orchestrator mid-flight)   | via queue durable               | via durable execution                       | empate                     |
+| Cenário C (at-least-once / execução dupla) | certeza sem idempotência        | exactly-once garantido                      | **Temporal**               |
+| Cenário D (saga órfã)                      | gap real (1-2 dias para fechar) | não existe                                  | **Temporal**               |
+| Observabilidade default                    | logs + Mgmt UI básico           | timeline + replay + search                  | **Temporal**               |
+| Esforço para observabilidade aceitável     | 3-5 dias eng                    | ~1 dia                                      | **Temporal**               |
+| DX em code review (1ª leitura)             | saga em 3-4 arquivos            | saga em 1 arquivo                           | **Temporal**               |
+| DX em code review (manter)                 | PHP comum                       | exige lint para evitar bugs de determinismo | **RabbitMQ**               |
+| Curva de aprendizado                       | baixa                           | semestre de calibração                      | **RabbitMQ**               |
+| Lock-in                                    | AMQP padrão aberto              | moderado (OSS, mas API específica)          | **RabbitMQ**               |
+| Custo financeiro 12 meses                  | ~$2400-4800 + 12 dias eng       | ~$1200-2400 (Cloud)                         | **Temporal** (curto prazo) |
+| Operação self-host Swarm                   | viável                          | não suportado                               | **RabbitMQ**               |
+| Operação EKS                               | Helm                            | Helm                                        | empate                     |
+| Bus factor                                 | lib interna                     | SDK público                                 | **Temporal**               |
 
 **Score qualitativo:**
 

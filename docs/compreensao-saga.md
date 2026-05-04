@@ -78,14 +78,14 @@ Um **coordenador central** (workflow / orchestrator / saga manager) comanda cada
 
 ### 2.3 Comparação direta
 
-| Aspecto                     | Orquestração                                   | Coreografia                                      |
-| --------------------------- | ---------------------------------------------- | ------------------------------------------------ |
-| Lógica do fluxo             | Centralizada                                   | Distribuída                                      |
-| Acoplamento entre serviços  | Mais acoplado ao orquestrador                  | Mínimo (só formato de evento)                    |
-| Visibilidade do fluxo       | Alta (um lugar tem o "mapa")                   | Baixa (precisa rastrear eventos)                 |
-| Debug                       | Mais simples — timeline central                | Mais difícil — correlação por `saga_id`          |
-| Mudança no fluxo            | Edita orchestrator                             | Coordena entre múltiplos serviços                |
-| Resiliência a falha do coord. | Crítica (single point)                       | N/A — não há coordenador                         |
+| Aspecto                       | Orquestração                    | Coreografia                             |
+| ----------------------------- | ------------------------------- | --------------------------------------- |
+| Lógica do fluxo               | Centralizada                    | Distribuída                             |
+| Acoplamento entre serviços    | Mais acoplado ao orquestrador   | Mínimo (só formato de evento)           |
+| Visibilidade do fluxo         | Alta (um lugar tem o "mapa")    | Baixa (precisa rastrear eventos)        |
+| Debug                         | Mais simples — timeline central | Mais difícil — correlação por `saga_id` |
+| Mudança no fluxo              | Edita orchestrator              | Coordena entre múltiplos serviços       |
+| Resiliência a falha do coord. | Crítica (single point)          | N/A — não há coordenador                |
 
 A escolha **não precisa ser organizacional única**. Domínios diferentes podem usar modelos diferentes; forçar um padrão único costuma ser simplificação excessiva.
 
@@ -97,11 +97,11 @@ Para tornar a comparação entre ferramentas neutra e reproduzível, todas as Po
 
 ### 3.1 Os passos
 
-| Passo | Serviço (hipotético)   | Ação local                               | Compensação                              |
-| ----- | ---------------------- | ---------------------------------------- | ---------------------------------------- |
-| `T₁`  | `acme/inventory`       | `ReserveStock` — reserva itens           | `ReleaseStock` — libera reserva          |
-| `T₂`  | `acme/payment-service` | `ChargeCredit` — cobra crédito           | `RefundCredit` — estorna cobrança        |
-| `T₃`  | `acme/order-service`   | `ConfirmShipping` — confirma envio       | `CancelShipping` — cancela envio         |
+| Passo | Serviço (hipotético)   | Ação local                         | Compensação                       |
+| ----- | ---------------------- | ---------------------------------- | --------------------------------- |
+| `T₁`  | `acme/inventory`       | `ReserveStock` — reserva itens     | `ReleaseStock` — libera reserva   |
+| `T₂`  | `acme/payment-service` | `ChargeCredit` — cobra crédito     | `RefundCredit` — estorna cobrança |
+| `T₃`  | `acme/order-service`   | `ConfirmShipping` — confirma envio | `CancelShipping` — cancela envio  |
 
 ### 3.2 O fluxo
 

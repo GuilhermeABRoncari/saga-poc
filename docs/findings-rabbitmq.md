@@ -208,14 +208,14 @@ A partir do 4.0, **classic mirrored queues foram removidas** do produto. Para HA
 
 A lib `AmqpTransport` foi estendida com flag `QUEUE_TYPE=quorum` para declarar queues como `x-queue-type=quorum`. Re-rodamos os testes-chave em **single-node** (não multi-node — fora do escopo da PoC):
 
-| Métrica                                   | Classic durable | Quorum         | Δ                              |
-| ----------------------------------------- | --------------- | -------------- | ------------------------------ |
-| RAM idle do broker (T3.2)                 | 108 MiB         | 103 MiB        | -5 MiB (paridade)              |
-| T1.3 burst 100 sagas (tempo total)        | 705 ms          | 934 ms         | **+32%** mais lento            |
-| T1.3 burst (sagas/s)                      | 142/s           | 107/s          | **-25%** throughput            |
-| T6.2 sequencial p99                       | 23.8 ms         | 23.2 ms        | paridade                       |
-| T6.2 sequencial p50                       | 21.8 ms         | 21.6 ms        | paridade                       |
-| T1.4 broker kill — comportamento da lib   | workers crash   | workers crash  | **idêntico** (gap continua)    |
+| Métrica                                 | Classic durable | Quorum        | Δ                           |
+| --------------------------------------- | --------------- | ------------- | --------------------------- |
+| RAM idle do broker (T3.2)               | 108 MiB         | 103 MiB       | -5 MiB (paridade)           |
+| T1.3 burst 100 sagas (tempo total)      | 705 ms          | 934 ms        | **+32%** mais lento         |
+| T1.3 burst (sagas/s)                    | 142/s           | 107/s         | **-25%** throughput         |
+| T6.2 sequencial p99                     | 23.8 ms         | 23.2 ms       | paridade                    |
+| T6.2 sequencial p50                     | 21.8 ms         | 21.6 ms       | paridade                    |
+| T1.4 broker kill — comportamento da lib | workers crash   | workers crash | **idêntico** (gap continua) |
 
 **Análise:**
 

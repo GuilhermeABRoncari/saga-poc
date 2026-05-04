@@ -8,4 +8,6 @@ composer.lock
 **/storage/sfn-config.json
 *.log
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json

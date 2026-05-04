@@ -15,7 +15,6 @@ Premissas em vigor:
 Decisões de plataforma que precisam estar resolvidas antes de qualquer commit no `order-service`:
 
 1. **Conta Temporal Cloud provisionada** (ou cluster self-hosted em Kubernetes) com:
-
    - Namespaces `app-prod` e `app-staging`.
    - mTLS cert/key emitidos (Cloud) ou cluster CA exportada (self-host).
    - Retenção de history: 30 dias para prod, 7 dias para staging.
@@ -527,19 +526,19 @@ CI roda `vendor/bin/phpstan analyse app/Sagas` em PR; bloqueia merge.
 
 ## Cronograma consolidado
 
-| Fase                                          | Esforço                            | Quem             |
-| --------------------------------------------- | ---------------------------------- | ---------------- |
-| 0. Pré-requisitos (Cloud, namespace, DNS)     | 1-2 dias                           | DevOps           |
-| 1. Compose local                              | 1 dia                              | Backend          |
-| 2. Dockerfile multi-stage + RoadRunner        | 2-3 dias                           | Backend + DevOps |
-| 3. Pacote interno (instalação básica)         | 1 dia                              | Backend          |
-| 4. Refator do endpoint + Workflow + Activities| 2-3 dias                           | Backend          |
-| 5. Artisan command worker                     | 1 dia                              | Backend          |
-| 6. Manifestos Kubernetes                      | 2-3 dias                           | DevOps           |
-| 7. Cross-service (decisão A/B)                | 1 dia decisão + N dias por serviço | Time + Backend   |
-| 8. Observabilidade                            | 3-5 dias                           | Backend + SRE    |
-| 9. Lint PHPStan                               | 3-5 dias                           | Backend          |
-| **Total p/ primeiro saga em prod**            | **~17-23 dias eng**                | —                |
+| Fase                                           | Esforço                            | Quem             |
+| ---------------------------------------------- | ---------------------------------- | ---------------- |
+| 0. Pré-requisitos (Cloud, namespace, DNS)      | 1-2 dias                           | DevOps           |
+| 1. Compose local                               | 1 dia                              | Backend          |
+| 2. Dockerfile multi-stage + RoadRunner         | 2-3 dias                           | Backend + DevOps |
+| 3. Pacote interno (instalação básica)          | 1 dia                              | Backend          |
+| 4. Refator do endpoint + Workflow + Activities | 2-3 dias                           | Backend          |
+| 5. Artisan command worker                      | 1 dia                              | Backend          |
+| 6. Manifestos Kubernetes                       | 2-3 dias                           | DevOps           |
+| 7. Cross-service (decisão A/B)                 | 1 dia decisão + N dias por serviço | Time + Backend   |
+| 8. Observabilidade                             | 3-5 dias                           | Backend + SRE    |
+| 9. Lint PHPStan                                | 3-5 dias                           | Backend          |
+| **Total p/ primeiro saga em prod**             | **~17-23 dias eng**                | —                |
 
 Confere com o número da `recomendacao-saga.md` §6 (custo de adoção ~1 semestre considerando rampa de aprendizado em paralelo a outras demandas).
 

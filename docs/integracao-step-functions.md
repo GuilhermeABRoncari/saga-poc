@@ -15,12 +15,10 @@ Premissas em vigor:
 ## Fase 0 — Pré-requisitos AWS (2-3 dias)
 
 1. **Conta AWS com Step Functions habilitado** + IAM roles:
-
    - `OrderSagaStateMachineRole`: assume role do Step Functions, permissions `states:StartExecution`, `states:DescribeExecution`, e ARNs das **Activities** (definidas como AWS Activities, não Lambdas).
    - `OrderSagaWorkerRole`: usado pelos pods que pollam Activities — `states:GetActivityTask`, `states:SendTaskSuccess`, `states:SendTaskFailure`, `states:SendTaskHeartbeat`.
 
 2. **Decisão de execução**: `STANDARD` vs `EXPRESS`:
-
    - **STANDARD** (recomendado pra saga): execuções até 1 ano, history visível, exactly-once. Custo: $0.025 por 1k transições.
    - **EXPRESS**: até 5 min, sem history persistido, custo bem menor — **inadequado pra compensação** (precisa history pra rastrear).
 

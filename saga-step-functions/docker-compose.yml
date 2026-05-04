@@ -10,7 +10,13 @@ services:
     ports:
       - "4566:4566"
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -sf http://localhost:4566/_localstack/health | grep -q '\"stepfunctions\": \"available\\|running\"'"]
+      test:
+        [
+          "CMD",
+          "sh",
+          "-c",
+          "curl -sf http://localhost:4566/_localstack/health | grep -q '\"stepfunctions\": \"available\\|running\"'",
+        ]
       interval: 5s
       timeout: 3s
       retries: 30

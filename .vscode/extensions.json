@@ -1,0 +1,9 @@
+{
+  "recommendations": [
+    "esbenp.prettier-vscode",
+    "editorconfig.editorconfig",
+    "davidanson.vscode-markdownlint",
+    "bmewburn.vscode-intelephense-client",
+    "ms-azuretools.vscode-docker"
+  ]
+}

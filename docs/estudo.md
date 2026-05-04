@@ -69,12 +69,12 @@ A tabela completa fica em [`recomendacao-saga.md`](./recomendacao-saga.md) §3.2
 
 Quatro PoCs foram implementadas neste repositório, em diretórios isolados. Todas executam o **mesmo workflow de referência de 3 passos com compensação LIFO** (`ReserveStock` → `ChargeCredit` → `ConfirmShipping`), descrito em [`compreensao-saga.md`](./compreensao-saga.md) §3.
 
-| PoC                            | Diretório                       | Modelo                       | Findings                                       |
-| ------------------------------ | ------------------------------- | ---------------------------- | ---------------------------------------------- |
-| RabbitMQ + lib custom          | `saga-rabbitmq/`                | Orquestração                 | [`findings-rabbitmq.md`](./findings-rabbitmq.md) |
-| Temporal                       | `saga-temporal/`                | Orquestração (durable exec.) | [`findings-temporal.md`](./findings-temporal.md) |
-| AWS Step Functions (LocalStack)| `saga-step-functions/`          | Orquestração managed         | [`findings-step-functions.md`](./findings-step-functions.md) |
-| RabbitMQ coreografado          | `saga-rabbitmq-coreografado/`   | Coreografia (lib mínima)     | [`findings-rabbitmq-coreografado.md`](./findings-rabbitmq-coreografado.md) |
+| PoC                             | Diretório                     | Modelo                       | Findings                                                                   |
+| ------------------------------- | ----------------------------- | ---------------------------- | -------------------------------------------------------------------------- |
+| RabbitMQ + lib custom           | `saga-rabbitmq/`              | Orquestração                 | [`findings-rabbitmq.md`](./findings-rabbitmq.md)                           |
+| Temporal                        | `saga-temporal/`              | Orquestração (durable exec.) | [`findings-temporal.md`](./findings-temporal.md)                           |
+| AWS Step Functions (LocalStack) | `saga-step-functions/`        | Orquestração managed         | [`findings-step-functions.md`](./findings-step-functions.md)               |
+| RabbitMQ coreografado           | `saga-rabbitmq-coreografado/` | Coreografia (lib mínima)     | [`findings-rabbitmq-coreografado.md`](./findings-rabbitmq-coreografado.md) |
 
 A 4ª PoC (coreografada) foi adicionada após o estudo identificar que as três primeiras cobriam apenas orquestração — o padrão merecia uma avaliação simétrica antes de qualquer recomendação fechada.
 

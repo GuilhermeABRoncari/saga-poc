@@ -19,39 +19,39 @@ Capítulos a seguir: §1 cruzamento ferramenta-a-ferramenta; §2 DX em code revi
 
 Tabela consolidada após baterias Tier 1 a Tier 6 (ver [`checklist-testes.md`](./checklist-testes.md)). Itens com referência `T*` têm medição empírica.
 
-| Critério                                              | RabbitMQ + lib interna                                                                            | Temporal                                                                                                              |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **Adoção rápida com time atual**                      | sim                                                                                               | parcial (curva inicial real)                                                                                          |
-| **Sem lock-in**                                       | sim                                                                                               | parcial (lock-in moderado, OSS)                                                                                       |
-| **Durable execution out-of-the-box** T1.4             | parcial (workers caem com broker e não reconectam)                                                | sim (sobreviveu a 30s de Postgres caído)                                                                              |
-| **Exactly-once de activity** T1.2                     | parcial (risco condicional, não certeza)                                                          | sim (exactly-once estrutural)                                                                                         |
-| **Observabilidade visual de saga**                    | não (precisa construir)                                                                           | sim                                                                                                                   |
-| **Compensação first-class**                           | parcial (constrói em ~30 LOC)                                                                     | sim                                                                                                                   |
-| **Compensação paralela** T2.3                         | parcial (paralelo natural por arquitetura, não controlável por LOC)                               | sim (1 LOC switch)                                                                                                    |
-| **Estado da compensação no DB confiável** T2.3        | não (lib atual mente: marca COMPENSATED em 103ms antes dos handlers terminarem)                   | sim (engine só marca completed após handlers terminarem)                                                              |
-| **Replay/postmortem**                                 | não (precisa construir)                                                                           | sim                                                                                                                   |
-| **Versionamento de saga** T1.1+T1.5                   | parcial (implícito → silencioso; mitigação 25-30 LOC infra + 10 LOC/saga)                         | sim (panic explícito; mitigação 4 LOC inline com `getVersion`)                                                        |
-| **Throughput burst (100 sagas concorrentes)** T1.3    | sim ~142 sagas/s (4.3+Khepri); 187 MB RAM total                                                   | parcial ~28 sagas/s, 629 MB RAM total                                                                                 |
-| **Throughput sustentado (5 min × 10/s)** T3.3         | sim 9.7/s, 0 falhas, RAM volta a baseline                                                         | sim 9.5/s, 0 falhas, +311 MB de history (não é leak)                                                                  |
-| **Footprint idle (RAM total)** T3.2                   | sim ~137 MiB (4.3)                                                                                | parcial ~439 MB (~3.2x mais)                                                                                          |
-| **Tamanho de imagens Docker** T3.2                    | sim ~665 MB total                                                                                 | parcial ~3800 MB total (~6x mais)                                                                                     |
-| **Cold start cacheado** T3.2                          | sim ~10s até saga rodar                                                                           | parcial ~30s (afetado por race condition de inicialização)                                                            |
-| **Setup novo dev (sem cache)** T3.1                   | sim ~2-3 min                                                                                      | não ~25 min (PECL grpc compile)                                                                                       |
-| **Detecção de falha (alerta)** T2.2                   | sim ~1s lag (40 LOC alerter)                                                                      | sim ~7s lag (40 LOC alerter; lag dominado por retries)                                                                |
-| **Cobertura automática de caminhos de falha** T2.2    | não (cada caminho exige código próprio)                                                           | sim (Failed automático para qualquer falha terminal)                                                                  |
-| **Postmortem / replay de saga antiga** T3.4           | parcial 2-15 min, sem payloads de entrada, sem replay                                             | sim 30s-1min via UI/tctl, history completo, replay programático                                                       |
-| **Resiliência a network outage (worker)** T4.1        | não workers caem com broker, não reconectam (T1.4)                                                | sim worker buferou resultado em 10s outage, completou Attempt:1                                                       |
-| **Robustez a falha de storage** T4.2                  | não silent inconsistency, sem health-check                                                        | sim workflows pausam até storage voltar, sem corrupção                                                                |
-| **Conceito nativo de timeout** T4.4                   | não inexistente; handler travado bloqueia consumer                                                | sim 4 tipos de timeout distintos + classificação no history                                                           |
-| **Reordenamento de steps durante deploy** T5.1        | não **silent corruption**: saga COMPLETED com state inconsistente                                 | sim panic LOUD com mensagem clara; workflow stuck até intervenção, estado preservado                                  |
-| **Mudança de shape de payload** T5.2                  | sim compensa corretamente (1 attempt)                                                             | sim compensa corretamente (3 retries default)                                                                         |
-| **Latência fim-a-fim p99** T6.2                       | sim 22ms (max 25ms, distribuição apertada)                                                        | parcial 351ms (~16x mais lento, distribuição bimodal)                                                                 |
-| **Throughput sequencial** T6.2                        | sim ~46 sagas/s                                                                                   | parcial ~7.4 wfs/s (~6x menor)                                                                                        |
-| **Custo Cloud em escala (estimado)** T6.1             | sim self-host viável                                                                              | não ~$58k/ano em volume agregado; inviável — self-host é a opção sensata                                              |
-| **DX em code review**                                 | sim (PHP comum)                                                                                   | parcial (saga centralizada em 1 arquivo, mas precisa entender determinismo)                                           |
-| **Operação em produção**                              | parcial (clustering RabbitMQ + lib que precisa cobrir gaps bloqueantes)                           | parcial (Temporal cluster ou Cloud)                                                                                   |
-| **Bus factor**                                        | não (lib interna)                                                                                 | sim (SDK público com 2.4M installs)                                                                                   |
-| **Maturidade da plataforma**                          | sim (RabbitMQ 18+ anos)                                                                           | sim (Temporal 5+ anos, mas crescendo rápido)                                                                          |
+| Critério                                           | RabbitMQ + lib interna                                                          | Temporal                                                                             |
+| -------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **Adoção rápida com time atual**                   | sim                                                                             | parcial (curva inicial real)                                                         |
+| **Sem lock-in**                                    | sim                                                                             | parcial (lock-in moderado, OSS)                                                      |
+| **Durable execution out-of-the-box** T1.4          | parcial (workers caem com broker e não reconectam)                              | sim (sobreviveu a 30s de Postgres caído)                                             |
+| **Exactly-once de activity** T1.2                  | parcial (risco condicional, não certeza)                                        | sim (exactly-once estrutural)                                                        |
+| **Observabilidade visual de saga**                 | não (precisa construir)                                                         | sim                                                                                  |
+| **Compensação first-class**                        | parcial (constrói em ~30 LOC)                                                   | sim                                                                                  |
+| **Compensação paralela** T2.3                      | parcial (paralelo natural por arquitetura, não controlável por LOC)             | sim (1 LOC switch)                                                                   |
+| **Estado da compensação no DB confiável** T2.3     | não (lib atual mente: marca COMPENSATED em 103ms antes dos handlers terminarem) | sim (engine só marca completed após handlers terminarem)                             |
+| **Replay/postmortem**                              | não (precisa construir)                                                         | sim                                                                                  |
+| **Versionamento de saga** T1.1+T1.5                | parcial (implícito → silencioso; mitigação 25-30 LOC infra + 10 LOC/saga)       | sim (panic explícito; mitigação 4 LOC inline com `getVersion`)                       |
+| **Throughput burst (100 sagas concorrentes)** T1.3 | sim ~142 sagas/s (4.3+Khepri); 187 MB RAM total                                 | parcial ~28 sagas/s, 629 MB RAM total                                                |
+| **Throughput sustentado (5 min × 10/s)** T3.3      | sim 9.7/s, 0 falhas, RAM volta a baseline                                       | sim 9.5/s, 0 falhas, +311 MB de history (não é leak)                                 |
+| **Footprint idle (RAM total)** T3.2                | sim ~137 MiB (4.3)                                                              | parcial ~439 MB (~3.2x mais)                                                         |
+| **Tamanho de imagens Docker** T3.2                 | sim ~665 MB total                                                               | parcial ~3800 MB total (~6x mais)                                                    |
+| **Cold start cacheado** T3.2                       | sim ~10s até saga rodar                                                         | parcial ~30s (afetado por race condition de inicialização)                           |
+| **Setup novo dev (sem cache)** T3.1                | sim ~2-3 min                                                                    | não ~25 min (PECL grpc compile)                                                      |
+| **Detecção de falha (alerta)** T2.2                | sim ~1s lag (40 LOC alerter)                                                    | sim ~7s lag (40 LOC alerter; lag dominado por retries)                               |
+| **Cobertura automática de caminhos de falha** T2.2 | não (cada caminho exige código próprio)                                         | sim (Failed automático para qualquer falha terminal)                                 |
+| **Postmortem / replay de saga antiga** T3.4        | parcial 2-15 min, sem payloads de entrada, sem replay                           | sim 30s-1min via UI/tctl, history completo, replay programático                      |
+| **Resiliência a network outage (worker)** T4.1     | não workers caem com broker, não reconectam (T1.4)                              | sim worker buferou resultado em 10s outage, completou Attempt:1                      |
+| **Robustez a falha de storage** T4.2               | não silent inconsistency, sem health-check                                      | sim workflows pausam até storage voltar, sem corrupção                               |
+| **Conceito nativo de timeout** T4.4                | não inexistente; handler travado bloqueia consumer                              | sim 4 tipos de timeout distintos + classificação no history                          |
+| **Reordenamento de steps durante deploy** T5.1     | não **silent corruption**: saga COMPLETED com state inconsistente               | sim panic LOUD com mensagem clara; workflow stuck até intervenção, estado preservado |
+| **Mudança de shape de payload** T5.2               | sim compensa corretamente (1 attempt)                                           | sim compensa corretamente (3 retries default)                                        |
+| **Latência fim-a-fim p99** T6.2                    | sim 22ms (max 25ms, distribuição apertada)                                      | parcial 351ms (~16x mais lento, distribuição bimodal)                                |
+| **Throughput sequencial** T6.2                     | sim ~46 sagas/s                                                                 | parcial ~7.4 wfs/s (~6x menor)                                                       |
+| **Custo Cloud em escala (estimado)** T6.1          | sim self-host viável                                                            | não ~$58k/ano em volume agregado; inviável — self-host é a opção sensata             |
+| **DX em code review**                              | sim (PHP comum)                                                                 | parcial (saga centralizada em 1 arquivo, mas precisa entender determinismo)          |
+| **Operação em produção**                           | parcial (clustering RabbitMQ + lib que precisa cobrir gaps bloqueantes)         | parcial (Temporal cluster ou Cloud)                                                  |
+| **Bus factor**                                     | não (lib interna)                                                               | sim (SDK público com 2.4M installs)                                                  |
+| **Maturidade da plataforma**                       | sim (RabbitMQ 18+ anos)                                                         | sim (Temporal 5+ anos, mas crescendo rápido)                                         |
 
 ### Pontos chave do RabbitMQ + lib interna
 
@@ -96,12 +96,12 @@ Comparação concreta com **dois cenários comuns de mudança em saga** contra a
 
 Tarefa: inserir um step `audit_log` (e sua compensação `unaudit_log`) entre `charge_credit` e `confirm_shipping`, ambos em `service-a`.
 
-| Modelo                      | Arquivos tocados | LOC tocadas (aprox.) | Local da mudança             | Reviewer entende sem rodar?                                                                  |
-| --------------------------- | ---------------- | -------------------- | ---------------------------- | -------------------------------------------------------------------------------------------- |
-| **RabbitMQ orquestrado**    | 3                | ~37                  | Centralizado em `definition()` + 2 arquivos de handler | Sim — basta ler o array de `Step` na ordem.                                                  |
-| **RabbitMQ coreografado**   | 3                | ~33                  | Distribuído: 2 handlers novos + 2 chamadas `react()` em `bin/service-a.php` reordenadas | Parcial — reviewer precisa montar mentalmente a cadeia de eventos (`saga.started → … → audit.logged → saga.completed`); não há "definição central" para conferir. |
-| **Temporal**                | 3                | ~30                  | Centralizado em `execute()` + 2 métodos novos na interface/implementação | Sim — `execute()` é leitura linear; `addCompensation` deixa LIFO óbvio.                      |
-| **Step Functions**          | 3-4              | ~50+                 | Centralizado em `state-machine.json` + 1 handler PHP + atualizar bootstrap/ARN | Verboso — ASL exige Catch chain manual; reviewer precisa rastrear todos os `Catch.Next` para garantir LIFO. |
+| Modelo                    | Arquivos tocados | LOC tocadas (aprox.) | Local da mudança                                                                        | Reviewer entende sem rodar?                                                                                                                                       |
+| ------------------------- | ---------------- | -------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **RabbitMQ orquestrado**  | 3                | ~37                  | Centralizado em `definition()` + 2 arquivos de handler                                  | Sim — basta ler o array de `Step` na ordem.                                                                                                                       |
+| **RabbitMQ coreografado** | 3                | ~33                  | Distribuído: 2 handlers novos + 2 chamadas `react()` em `bin/service-a.php` reordenadas | Parcial — reviewer precisa montar mentalmente a cadeia de eventos (`saga.started → … → audit.logged → saga.completed`); não há "definição central" para conferir. |
+| **Temporal**              | 3                | ~30                  | Centralizado em `execute()` + 2 métodos novos na interface/implementação                | Sim — `execute()` é leitura linear; `addCompensation` deixa LIFO óbvio.                                                                                           |
+| **Step Functions**        | 3-4              | ~50+                 | Centralizado em `state-machine.json` + 1 handler PHP + atualizar bootstrap/ARN          | Verboso — ASL exige Catch chain manual; reviewer precisa rastrear todos os `Catch.Next` para garantir LIFO.                                                       |
 
 **Observações:**
 
@@ -113,12 +113,12 @@ Tarefa: inserir um step `audit_log` (e sua compensação `unaudit_log`) entre `c
 
 Tarefa: trocar a ordem de `reserve_stock` (step 0) e `charge_credit` (step 1), de modo que cobrança aconteça **antes** da reserva. Caminho de compensação muda em sequência.
 
-| Modelo                      | Arquivos tocados | LOC tocadas (aprox.) | Risco em sagas em voo durante deploy                                                          |
-| --------------------------- | ---------------- | -------------------- | ---------------------------------------------------------------------------------------------- |
-| **RabbitMQ orquestrado**    | 1                | ~6 (mover bloco no array) | **Silent corruption (T5.1)** — sagas em voo executam definição nova sobre estado salvo na ordem antiga, sem aviso. |
-| **RabbitMQ coreografado**   | 2                | ~6 distribuídos              | Bagunça transitória — durante deploy, alguns serviços têm config nova e outros antiga; eventos podem ser publicados/consumidos numa cadeia inconsistente, mas **não há saga.definition central que entre em silent corruption** — cada serviço só processa o que entende. Risco: deadlock de cadeia (eventos não-consumidos). |
-| **Temporal**                | 1                | ~4 (trocar 2 yields)         | Replay panic (`TMPRL1100`) — workflow para de avançar e exige `Workflow::getVersion()` ou intervenção manual. **Honesto e seguro**.  |
-| **Step Functions**          | 1                | ~10+ (trocar `StartAt` + ajustar vários `Next`) | Imutabilidade — executions em voo continuam na versão antiga (Step Functions versiona implicitamente); só novas executions usam a definição nova. |
+| Modelo                    | Arquivos tocados | LOC tocadas (aprox.)                            | Risco em sagas em voo durante deploy                                                                                                                                                                                                                                                                                          |
+| ------------------------- | ---------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **RabbitMQ orquestrado**  | 1                | ~6 (mover bloco no array)                       | **Silent corruption (T5.1)** — sagas em voo executam definição nova sobre estado salvo na ordem antiga, sem aviso.                                                                                                                                                                                                            |
+| **RabbitMQ coreografado** | 2                | ~6 distribuídos                                 | Bagunça transitória — durante deploy, alguns serviços têm config nova e outros antiga; eventos podem ser publicados/consumidos numa cadeia inconsistente, mas **não há saga.definition central que entre em silent corruption** — cada serviço só processa o que entende. Risco: deadlock de cadeia (eventos não-consumidos). |
+| **Temporal**              | 1                | ~4 (trocar 2 yields)                            | Replay panic (`TMPRL1100`) — workflow para de avançar e exige `Workflow::getVersion()` ou intervenção manual. **Honesto e seguro**.                                                                                                                                                                                           |
+| **Step Functions**        | 1                | ~10+ (trocar `StartAt` + ajustar vários `Next`) | Imutabilidade — executions em voo continuam na versão antiga (Step Functions versiona implicitamente); só novas executions usam a definição nova.                                                                                                                                                                             |
 
 **Observações:**
 
@@ -129,14 +129,14 @@ Tarefa: trocar a ordem de `reserve_stock` (step 0) e `charge_credit` (step 1), d
 
 ### Síntese
 
-| Critério                                          | Vencedor                                  |
-| ------------------------------------------------- | ----------------------------------------- |
-| Cenário A — adicionar step                        | Empate **Orquestrado / Temporal**         |
-| Cenário B — reordenar steps (diff size)           | **Temporal** (4 LOC)                      |
-| Cenário B — segurança em deploy                   | **Temporal / Step Functions** (ambos seguros) |
-| Cenário B — silent corruption                     | **Pior: RabbitMQ orquestrado** (T5.1)     |
-| Reviewer afirma correção sem rodar                | **Orquestrado / Temporal** (centralizados) |
-| Reviewer precisa montar grafo de eventos          | **Coreografado** (mais difícil em fluxos médios/grandes) |
+| Critério                                 | Vencedor                                                 |
+| ---------------------------------------- | -------------------------------------------------------- |
+| Cenário A — adicionar step               | Empate **Orquestrado / Temporal**                        |
+| Cenário B — reordenar steps (diff size)  | **Temporal** (4 LOC)                                     |
+| Cenário B — segurança em deploy          | **Temporal / Step Functions** (ambos seguros)            |
+| Cenário B — silent corruption            | **Pior: RabbitMQ orquestrado** (T5.1)                    |
+| Reviewer afirma correção sem rodar       | **Orquestrado / Temporal** (centralizados)               |
+| Reviewer precisa montar grafo de eventos | **Coreografado** (mais difícil em fluxos médios/grandes) |
 
 **Conclusão:** Temporal e RabbitMQ orquestrado têm **DX equivalente em mudanças aditivas**, mas Temporal vence claramente em **mudanças que reordenam ou removem steps** porque o engine força tratamento de versionamento. RabbitMQ coreografado paga um custo de DX que não aparece nos micro-cenários (LOC) mas aparece quando o fluxo cresce (5+ steps, múltiplos serviços) — o reviewer precisa de ferramentas externas (diagramas, traces) para validar coerência da cadeia. Step Functions tem segurança de deploy excelente mas verbosidade de ASL pesa em fluxos médios.
 
@@ -350,15 +350,15 @@ Filament admin panel sobre `saga_view`:
 
 ### §7.5 Custos estimados
 
-| Componente                                    | Custo eng        | Custo operacional                   |
-| --------------------------------------------- | ---------------- | ----------------------------------- |
-| Schema + migrations                           | ~0.5 dia         | -                                   |
-| Worker consumer + idempotência                | ~1.5 dia         | 1 container leve (~30 MiB RAM)      |
-| Filament admin (lista + drill-down)           | ~2 dias          | Roteia para banco existente         |
-| Métricas agregadas (Grafana ou dashboard)     | ~1 dia           | Reusa stack de observabilidade      |
-| Testes (unit + integração)                    | ~1 dia           | -                                   |
-| **Total inicial**                             | **~6 dias**      | -                                   |
-| Manutenção recorrente                         | ~0.5 dia/mês     | $30-50/mês de banco/container       |
+| Componente                                | Custo eng    | Custo operacional              |
+| ----------------------------------------- | ------------ | ------------------------------ |
+| Schema + migrations                       | ~0.5 dia     | -                              |
+| Worker consumer + idempotência            | ~1.5 dia     | 1 container leve (~30 MiB RAM) |
+| Filament admin (lista + drill-down)       | ~2 dias      | Roteia para banco existente    |
+| Métricas agregadas (Grafana ou dashboard) | ~1 dia       | Reusa stack de observabilidade |
+| Testes (unit + integração)                | ~1 dia       | -                              |
+| **Total inicial**                         | **~6 dias**  | -                              |
+| Manutenção recorrente                     | ~0.5 dia/mês | $30-50/mês de banco/container  |
 
 ### §7.6 Quando construir o Saga Aggregator
 
@@ -369,14 +369,14 @@ Filament admin panel sobre `saga_view`:
 
 Construir o Saga Aggregator é **recriar parte do que o Temporal entrega de graça** (lista de workflows, drill-down, retry). A diferença é:
 
-| Aspecto                               | Saga Aggregator (caseiro)        | Temporal Web                      |
-| ------------------------------------- | -------------------------------- | --------------------------------- |
-| Custo inicial                         | ~6 dias eng                      | $0 (vem com Temporal)             |
-| Replay determinístico                 | não há                           | nativo                            |
-| Auditoria de payload entrada/saída    | sim, se publicado nos eventos    | nativo                            |
-| Visualização gráfica do fluxo         | tabela + JSON                    | timeline gráfica nativa           |
-| Custo de manter                       | ~0.5 dia/mês                     | $0 (Temporal mantém)              |
-| Lock-in                               | nenhum                           | médio (Temporal-specific)         |
+| Aspecto                            | Saga Aggregator (caseiro)     | Temporal Web              |
+| ---------------------------------- | ----------------------------- | ------------------------- |
+| Custo inicial                      | ~6 dias eng                   | $0 (vem com Temporal)     |
+| Replay determinístico              | não há                        | nativo                    |
+| Auditoria de payload entrada/saída | sim, se publicado nos eventos | nativo                    |
+| Visualização gráfica do fluxo      | tabela + JSON                 | timeline gráfica nativa   |
+| Custo de manter                    | ~0.5 dia/mês                  | $0 (Temporal mantém)      |
+| Lock-in                            | nenhum                        | médio (Temporal-specific) |
 
 **Resumindo:** o Saga Aggregator é viável mas é **trabalho real**. Quando o estudo defende coreografia em RabbitMQ, defende **com este custo agregado** — não como "coreografia é grátis".
 
@@ -390,13 +390,13 @@ A discussão de custo até aqui ficou em prosa ("~3 dias eng", "~$30-150/mês", 
 
 Caso típico de operação interna ou produto early-stage.
 
-| Combinação                            | Custo eng adoção | Custo recorrente 12m              | Total 12m            |
-| ------------------------------------- | ---------------- | --------------------------------- | -------------------- |
-| RabbitMQ orquestrado + lib interna    | ~17 dias = $11k  | $50/mês broker self-hosted        | ~$11.6k              |
-| RabbitMQ coreografado                 | ~12 dias = $7.7k | $50/mês broker self-hosted + agg. | ~$8.3k               |
-| **Temporal self-hosted (Postgres)**   | ~25 dias = $16k  | ~$200/mês infra + $30 RDS         | ~$18.8k              |
-| **Temporal Cloud**                    | ~15 dias = $9.6k | $25/mês free tier (3k abaixo)     | ~$9.9k               |
-| **Step Functions**                    | ~10 dias = $6.4k | $0 free tier (4k transições/mês)  | **~$6.4k**           |
+| Combinação                          | Custo eng adoção | Custo recorrente 12m              | Total 12m  |
+| ----------------------------------- | ---------------- | --------------------------------- | ---------- |
+| RabbitMQ orquestrado + lib interna  | ~17 dias = $11k  | $50/mês broker self-hosted        | ~$11.6k    |
+| RabbitMQ coreografado               | ~12 dias = $7.7k | $50/mês broker self-hosted + agg. | ~$8.3k     |
+| **Temporal self-hosted (Postgres)** | ~25 dias = $16k  | ~$200/mês infra + $30 RDS         | ~$18.8k    |
+| **Temporal Cloud**                  | ~15 dias = $9.6k | $25/mês free tier (3k abaixo)     | ~$9.9k     |
+| **Step Functions**                  | ~10 dias = $6.4k | $0 free tier (4k transições/mês)  | **~$6.4k** |
 
 **Vencedor:** Step Functions. Free tier cobre o volume; custo de adoção é o menor (~10 dias, ASL é simples para 3 steps).
 
@@ -404,13 +404,13 @@ Caso típico de operação interna ou produto early-stage.
 
 Caso típico de SaaS B2B em produção estabelecida.
 
-| Combinação                            | Custo eng adoção | Custo recorrente 12m              | Total 12m            |
-| ------------------------------------- | ---------------- | --------------------------------- | -------------------- |
-| **RabbitMQ orquestrado + lib interna**| ~22 dias = $14k  | $1.2k/mês broker + storage        | **~$28.4k**          |
-| RabbitMQ coreografado                 | ~17 dias = $11k  | $1.2k/mês broker + saga aggregator | ~$25.4k             |
-| Temporal self-hosted (Postgres)       | ~25 dias = $16k  | $4k/mês infra + DBA part-time     | ~$64k                |
-| **Temporal Cloud**                    | ~15 dias = $9.6k | ~$1.6k/mês (Essentials + actions) | **~$28.8k**          |
-| Step Functions                        | ~10 dias = $6.4k | ~$3k/mês ($0.025/transição × 1.2M) | ~$42.4k             |
+| Combinação                             | Custo eng adoção | Custo recorrente 12m               | Total 12m   |
+| -------------------------------------- | ---------------- | ---------------------------------- | ----------- |
+| **RabbitMQ orquestrado + lib interna** | ~22 dias = $14k  | $1.2k/mês broker + storage         | **~$28.4k** |
+| RabbitMQ coreografado                  | ~17 dias = $11k  | $1.2k/mês broker + saga aggregator | ~$25.4k     |
+| Temporal self-hosted (Postgres)        | ~25 dias = $16k  | $4k/mês infra + DBA part-time      | ~$64k       |
+| **Temporal Cloud**                     | ~15 dias = $9.6k | ~$1.6k/mês (Essentials + actions)  | **~$28.8k** |
+| Step Functions                         | ~10 dias = $6.4k | ~$3k/mês ($0.025/transição × 1.2M) | ~$42.4k     |
 
 **Empate técnico:** RabbitMQ orquestrado vs Temporal Cloud, ambos ~$28k em 12m. Decisão fica em DX, lock-in e capacidade SRE.
 
@@ -418,23 +418,23 @@ Caso típico de SaaS B2B em produção estabelecida.
 
 Caso de marketplaces grandes ou backbones críticos.
 
-| Combinação                            | Custo eng adoção | Custo recorrente 12m              | Total 12m            |
-| ------------------------------------- | ---------------- | --------------------------------- | -------------------- |
-| RabbitMQ orquestrado (cluster HA)     | ~30 dias = $19k  | $5k/mês cluster quorum + obs      | ~$79k                |
-| **RabbitMQ coreografado (cluster HA)**| ~25 dias = $16k  | $5k/mês cluster + saga aggregator | **~$76k**            |
-| Temporal self-hosted (Aurora HA)      | ~30 dias = $19k  | $8k/mês infra + DBA dedicado      | ~$115k               |
-| Temporal Cloud                        | ~15 dias = $9.6k | ~$5k/mês ($58k/ano em escala)     | ~$67.6k              |
-| Step Functions                        | ~10 dias = $6.4k | ~$25k/mês (12M transições)        | ~$306k               |
+| Combinação                             | Custo eng adoção | Custo recorrente 12m              | Total 12m |
+| -------------------------------------- | ---------------- | --------------------------------- | --------- |
+| RabbitMQ orquestrado (cluster HA)      | ~30 dias = $19k  | $5k/mês cluster quorum + obs      | ~$79k     |
+| **RabbitMQ coreografado (cluster HA)** | ~25 dias = $16k  | $5k/mês cluster + saga aggregator | **~$76k** |
+| Temporal self-hosted (Aurora HA)       | ~30 dias = $19k  | $8k/mês infra + DBA dedicado      | ~$115k    |
+| Temporal Cloud                         | ~15 dias = $9.6k | ~$5k/mês ($58k/ano em escala)     | ~$67.6k   |
+| Step Functions                         | ~10 dias = $6.4k | ~$25k/mês (12M transições)        | ~$306k    |
 
 **Vencedor financeiro:** Temporal Cloud em pricing puro. Mas RabbitMQ coreografado é competitivo se o time tem capacidade SRE.
 
 ### Análise consolidada
 
-| Volume    | Vencedor financeiro      | Vencedor por DX          | Vencedor por risco operacional |
-| --------- | ------------------------ | ------------------------ | ------------------------------ |
-| Baixo     | Step Functions           | Empate Step Functions / RabbitMQ orquestrado | Step Functions (managed)       |
-| Médio     | Empate RabbitMQ-orq / Temporal Cloud | Temporal Cloud (DX rica) | Temporal Cloud (managed)       |
-| Alto      | Temporal Cloud           | Temporal Cloud           | RabbitMQ self-hosted (sem lock-in) |
+| Volume | Vencedor financeiro                  | Vencedor por DX                              | Vencedor por risco operacional     |
+| ------ | ------------------------------------ | -------------------------------------------- | ---------------------------------- |
+| Baixo  | Step Functions                       | Empate Step Functions / RabbitMQ orquestrado | Step Functions (managed)           |
+| Médio  | Empate RabbitMQ-orq / Temporal Cloud | Temporal Cloud (DX rica)                     | Temporal Cloud (managed)           |
+| Alto   | Temporal Cloud                       | Temporal Cloud                               | RabbitMQ self-hosted (sem lock-in) |
 
 **Limitações destes números:**
 

@@ -37,26 +37,26 @@ Cada PoC implementou o **mesmo workflow** (3 passos: `ReserveStock` → `ChargeC
 
 ### 2.1 Tabela comparativa final
 
-| Eixo                                       | RabbitMQ orquestrado            | RabbitMQ coreografado            | Temporal                                    | Step Functions                          |
-| ------------------------------------------ | ------------------------------- | -------------------------------- | ------------------------------------------- | --------------------------------------- |
-| **LOC da lib**                             | 381                             | 357                              | wrapper estimado ~5-7 dias eng              | 119 (state-machine.json) + workers      |
-| **T6.2 latência sequencial p50**           | 21.8 ms                         | **10.2 ms**                      | 59.9 ms                                     | ~600 ms (LocalStack)                    |
-| **T6.2 latência sequencial p99**           | 23.8 ms                         | **20.4 ms**                      | 351.2 ms                                    | ~2092 ms (LocalStack)                   |
-| **Throughput sequencial**                  | ~46/s                           | **~94/s**                        | ~7.4/s                                      | ~7.5/s (LocalStack)                     |
-| **T1.3 burst (100 sagas concorrentes)**    | 142/s (4.3 classic durable)     | dependente do consumer           | 28/s                                        | 10.9/s                                  |
-| **RAM idle (stack)**                       | ~108 MiB broker (4.3)           | ~110 MiB broker                  | 439 MB (~4×)                                | LocalStack ~600 MB                      |
-| **Imagens Docker**                         | 665 MB                          | 665 MB                           | 3800 MB                                     | LocalStack ~1 GB                        |
-| **INSERTs por saga (happy)**               | 1                               | **0**                            | 38                                          | depende da ASL                          |
-| **INSERTs por saga (com compensação)**     | 1                               | 2                                | 53                                          | depende da ASL                          |
-| **HA em produção**                         | Quorum queues (−25% throughput) | Quorum queues (−25% throughput)  | Replicação nativa do engine                 | Multi-AZ AWS-managed                    |
-| **SGBD necessário**                        | nenhum dedicado                 | nenhum dedicado                  | Postgres / **MySQL 8** / Cassandra (≠ MariaDB) | nenhum (managed)                     |
-| **Audit trail / replay**                   | Construir (Saga Aggregator)     | Construir (Saga Aggregator)     | Nativo, retention configurável              | Nativo (CloudWatch + Execution history) |
-| **T5.1 silent corruption sob reorder**     | **Sim** — saga COMPLETED com state corrompido | N/A — sem definição central     | Panic LOUD `[TMPRL1100]`                    | Pinning vs migration silenciosa         |
-| **T1.4 worker survives broker outage**     | Não (sem auto-reconnect)        | **Sim** (reconnect na lib)       | Sim (gRPC retry nativo)                     | N/A                                     |
-| **T4.4 conceito de timeout**               | Não tem                         | Não tem                          | 4 tipos distintos                           | Definido na ASL                         |
-| **Lock-in**                                | Nenhum (AMQP padrão)            | Nenhum (AMQP padrão)             | Médio (engine + SDK)                        | Profundo (AWS-only)                     |
-| **Custo Cloud em escala (~17M sagas/mês × 7 actions)** | $2.4-4.8k/12 meses self-host | $2.4-4.8k/12 meses self-host | **~$58k/ano** Cloud / ~$3-6k/ano self-host | ~$51k/ano                                  |
-| **Custo de adoção (eng × dias)**           | ~17-23 dias inicial             | ~10-12 dias inicial              | ~10 dias + 1 semestre calibração            | ~5-7 dias                               |
+| Eixo                                                   | RabbitMQ orquestrado                          | RabbitMQ coreografado           | Temporal                                       | Step Functions                          |
+| ------------------------------------------------------ | --------------------------------------------- | ------------------------------- | ---------------------------------------------- | --------------------------------------- |
+| **LOC da lib**                                         | 381                                           | 357                             | wrapper estimado ~5-7 dias eng                 | 119 (state-machine.json) + workers      |
+| **T6.2 latência sequencial p50**                       | 21.8 ms                                       | **10.2 ms**                     | 59.9 ms                                        | ~600 ms (LocalStack)                    |
+| **T6.2 latência sequencial p99**                       | 23.8 ms                                       | **20.4 ms**                     | 351.2 ms                                       | ~2092 ms (LocalStack)                   |
+| **Throughput sequencial**                              | ~46/s                                         | **~94/s**                       | ~7.4/s                                         | ~7.5/s (LocalStack)                     |
+| **T1.3 burst (100 sagas concorrentes)**                | 142/s (4.3 classic durable)                   | dependente do consumer          | 28/s                                           | 10.9/s                                  |
+| **RAM idle (stack)**                                   | ~108 MiB broker (4.3)                         | ~110 MiB broker                 | 439 MB (~4×)                                   | LocalStack ~600 MB                      |
+| **Imagens Docker**                                     | 665 MB                                        | 665 MB                          | 3800 MB                                        | LocalStack ~1 GB                        |
+| **INSERTs por saga (happy)**                           | 1                                             | **0**                           | 38                                             | depende da ASL                          |
+| **INSERTs por saga (com compensação)**                 | 1                                             | 2                               | 53                                             | depende da ASL                          |
+| **HA em produção**                                     | Quorum queues (−25% throughput)               | Quorum queues (−25% throughput) | Replicação nativa do engine                    | Multi-AZ AWS-managed                    |
+| **SGBD necessário**                                    | nenhum dedicado                               | nenhum dedicado                 | Postgres / **MySQL 8** / Cassandra (≠ MariaDB) | nenhum (managed)                        |
+| **Audit trail / replay**                               | Construir (Saga Aggregator)                   | Construir (Saga Aggregator)     | Nativo, retention configurável                 | Nativo (CloudWatch + Execution history) |
+| **T5.1 silent corruption sob reorder**                 | **Sim** — saga COMPLETED com state corrompido | N/A — sem definição central     | Panic LOUD `[TMPRL1100]`                       | Pinning vs migration silenciosa         |
+| **T1.4 worker survives broker outage**                 | Não (sem auto-reconnect)                      | **Sim** (reconnect na lib)      | Sim (gRPC retry nativo)                        | N/A                                     |
+| **T4.4 conceito de timeout**                           | Não tem                                       | Não tem                         | 4 tipos distintos                              | Definido na ASL                         |
+| **Lock-in**                                            | Nenhum (AMQP padrão)                          | Nenhum (AMQP padrão)            | Médio (engine + SDK)                           | Profundo (AWS-only)                     |
+| **Custo Cloud em escala (~17M sagas/mês × 7 actions)** | $2.4-4.8k/12 meses self-host                  | $2.4-4.8k/12 meses self-host    | **~$58k/ano** Cloud / ~$3-6k/ano self-host     | ~$51k/ano                               |
+| **Custo de adoção (eng × dias)**                       | ~17-23 dias inicial                           | ~10-12 dias inicial             | ~10 dias + 1 semestre calibração               | ~5-7 dias                               |
 
 > Notas:
 >
@@ -69,22 +69,22 @@ Cada PoC implementou o **mesmo workflow** (3 passos: `ReserveStock` → `ChargeC
 
 Cada combinação foi pontuada nos critérios qualitativos do estudo. Vermelho = perde, verde = vence, amarelo = empate ou condicional.
 
-| Critério                                     | RabbitMQ-orq | RabbitMQ-cor | Temporal     | Step Functions |
-| -------------------------------------------- | ------------ | ------------ | ------------ | -------------- |
-| Latência baixa                               | Vence        | **Vence**    | Perde        | Perde          |
-| Throughput sustentado                        | Vence        | **Vence**    | Empate       | Perde          |
-| Footprint (RAM, imagem, cold start)          | Vence        | Vence        | Perde        | Empate         |
-| Custo financeiro 12 meses                    | Vence        | Vence        | Perde escala | Perde escala   |
-| DX em code review (fluxo lê-se sem rodar)    | Empate       | Perde        | **Vence**    | Empate         |
-| Audit trail / postmortem rico                | Perde        | Perde        | **Vence**    | Vence          |
-| Replay determinístico                        | Não tem      | Não tem      | **Vence**    | Empate         |
-| Conceito nativo de timeout                   | Não tem      | Não tem      | **Vence**    | Vence          |
-| Segurança contra silent corruption (T5.1)    | **Perde**    | N/A          | **Vence**    | Empate         |
-| Durable execution sob falha de infra (T1.4)  | Perde        | Vence        | **Vence**    | Vence          |
-| Operação (sem cluster próprio)               | Empate       | Empate       | Perde        | **Vence**      |
-| Acoplamento entre serviços                   | Empate       | **Vence**    | Empate       | Empate         |
-| Lock-in (vendor / proprietário)              | **Vence**    | **Vence**    | Empate       | Perde          |
-| Compatibilidade com banco existente          | **Vence**    | **Vence**    | Perde MariaDB| Vence          |
+| Critério                                    | RabbitMQ-orq | RabbitMQ-cor | Temporal      | Step Functions |
+| ------------------------------------------- | ------------ | ------------ | ------------- | -------------- |
+| Latência baixa                              | Vence        | **Vence**    | Perde         | Perde          |
+| Throughput sustentado                       | Vence        | **Vence**    | Empate        | Perde          |
+| Footprint (RAM, imagem, cold start)         | Vence        | Vence        | Perde         | Empate         |
+| Custo financeiro 12 meses                   | Vence        | Vence        | Perde escala  | Perde escala   |
+| DX em code review (fluxo lê-se sem rodar)   | Empate       | Perde        | **Vence**     | Empate         |
+| Audit trail / postmortem rico               | Perde        | Perde        | **Vence**     | Vence          |
+| Replay determinístico                       | Não tem      | Não tem      | **Vence**     | Empate         |
+| Conceito nativo de timeout                  | Não tem      | Não tem      | **Vence**     | Vence          |
+| Segurança contra silent corruption (T5.1)   | **Perde**    | N/A          | **Vence**     | Empate         |
+| Durable execution sob falha de infra (T1.4) | Perde        | Vence        | **Vence**     | Vence          |
+| Operação (sem cluster próprio)              | Empate       | Empate       | Perde         | **Vence**      |
+| Acoplamento entre serviços                  | Empate       | **Vence**    | Empate        | Empate         |
+| Lock-in (vendor / proprietário)             | **Vence**    | **Vence**    | Empate        | Perde          |
+| Compatibilidade com banco existente         | **Vence**    | **Vence**    | Perde MariaDB | Vence          |
 
 A leitura honesta:
 
@@ -119,45 +119,45 @@ A escolha "RabbitMQ orquestrado vs RabbitMQ coreografado vs Temporal vs Step Fun
 
 ### 4.1 Por característica do fluxo
 
-| Característica do fluxo                                          | Recomendação                  | Justificativa                                                                                                  |
-| ---------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **Fluxo curto (≤ 3 steps), poucos serviços (≤ 2)**               | RabbitMQ coreografado         | Custo de DX baixo (cadeia de eventos cabe na cabeça); ganho de latência (~2× vs orquestrado).                  |
-| **Fluxo médio (4-7 steps), múltiplos serviços (3-5)**            | Empate Temporal / orquestrado | Coreografia começa a perder em DX (cadeia de eventos vira grafo); orquestração centralizada vence em revisão.  |
-| **Fluxo longo (8+ steps) ou aninhado (sub-sagas)**               | **Temporal**                  | Workflow code centralizado é a única forma sã de manter; coreografia vira spaghetti.                           |
-| **Fluxo com decisões condicionais complexas**                    | **Temporal** ou Step Functions | Branching/loops são primeira-classe; em coreografia exige máquina de estado implícita por evento.              |
-| **Fluxo curtíssimo (1-2 steps) e quase sempre síncrono**         | **Não usar SAGA**             | HTTP request síncrono + idempotência local resolve. SAGA é overhead.                                           |
+| Característica do fluxo                                  | Recomendação                   | Justificativa                                                                                                 |
+| -------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| **Fluxo curto (≤ 3 steps), poucos serviços (≤ 2)**       | RabbitMQ coreografado          | Custo de DX baixo (cadeia de eventos cabe na cabeça); ganho de latência (~2× vs orquestrado).                 |
+| **Fluxo médio (4-7 steps), múltiplos serviços (3-5)**    | Empate Temporal / orquestrado  | Coreografia começa a perder em DX (cadeia de eventos vira grafo); orquestração centralizada vence em revisão. |
+| **Fluxo longo (8+ steps) ou aninhado (sub-sagas)**       | **Temporal**                   | Workflow code centralizado é a única forma sã de manter; coreografia vira spaghetti.                          |
+| **Fluxo com decisões condicionais complexas**            | **Temporal** ou Step Functions | Branching/loops são primeira-classe; em coreografia exige máquina de estado implícita por evento.             |
+| **Fluxo curtíssimo (1-2 steps) e quase sempre síncrono** | **Não usar SAGA**              | HTTP request síncrono + idempotência local resolve. SAGA é overhead.                                          |
 
 ### 4.2 Por característica não-funcional
 
-| Requisito                                                        | Recomendação                  | Justificativa                                                                                                  |
-| ---------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **SLO de latência p99 < 50ms**                                   | RabbitMQ (qualquer modelo)    | Temporal p99=351ms está fora do envelope; Step Functions é pior ainda (p99=2092ms em LocalStack).              |
-| **Compliance / audit trail estrito**                             | **Temporal**                  | Audit trail nativo, replay determinístico, retention configurável. RabbitMQ exige construir.                   |
-| **Sagas em voo durante deploy frequentes**                       | **Temporal** ou Step Functions | Versionamento explícito; RabbitMQ orquestrado tem T5.1 (silent corruption).                                    |
-| **Throughput burst alto sustentado (1000+ sagas/s)**             | RabbitMQ coreografado         | ~94 sagas/s sequencial; coreografia distribui carga sem coordenador central como gargalo.                      |
-| **Volume baixo (≤ 100 sagas/min)**                               | Qualquer um — escolher por DX | Throughput não é decisor; outros critérios pesam mais.                                                         |
-| **Volume muito alto (10k+ sagas/s sustentados)**                 | **Temporal com Cassandra**    | Único combo que escala horizontalmente sem reengineering; mas custo operacional alto.                          |
+| Requisito                                            | Recomendação                   | Justificativa                                                                                     |
+| ---------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------- |
+| **SLO de latência p99 < 50ms**                       | RabbitMQ (qualquer modelo)     | Temporal p99=351ms está fora do envelope; Step Functions é pior ainda (p99=2092ms em LocalStack). |
+| **Compliance / audit trail estrito**                 | **Temporal**                   | Audit trail nativo, replay determinístico, retention configurável. RabbitMQ exige construir.      |
+| **Sagas em voo durante deploy frequentes**           | **Temporal** ou Step Functions | Versionamento explícito; RabbitMQ orquestrado tem T5.1 (silent corruption).                       |
+| **Throughput burst alto sustentado (1000+ sagas/s)** | RabbitMQ coreografado          | ~94 sagas/s sequencial; coreografia distribui carga sem coordenador central como gargalo.         |
+| **Volume baixo (≤ 100 sagas/min)**                   | Qualquer um — escolher por DX  | Throughput não é decisor; outros critérios pesam mais.                                            |
+| **Volume muito alto (10k+ sagas/s sustentados)**     | **Temporal com Cassandra**     | Único combo que escala horizontalmente sem reengineering; mas custo operacional alto.             |
 
 ### 4.3 Por característica do time
 
-| Característica                                                   | Recomendação                  | Justificativa                                                                                                  |
-| ---------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **Time pequeno (≤ 5 devs)**                                      | Empate orquestrado / Temporal | Coreografia exige discipline de eventos; com time pequeno qualquer disciplina vira gargalo de uma pessoa.      |
-| **Time médio (6-15 devs), múltiplos squads**                     | RabbitMQ coreografado         | Cada squad opera seu serviço; coreografia maximiza desacoplamento; sem orquestrador central como gargalo.      |
-| **Time grande (15+ devs) com tooling maduro**                    | **Temporal**                  | Investimento em determinismo/lib interna se amortiza; observabilidade out-of-the-box vence custo de aprendizado. |
-| **Time sem expertise prévia em filas/event-driven**              | **Temporal Cloud**            | Curva de RabbitMQ + lib interna é maior que aprender Temporal. Cloud abstrai operação.                         |
-| **Time AWS-native, com expertise Step Functions**                | **Step Functions**            | Re-aproveitar conhecimento existente vence ganho marginal de outros.                                           |
+| Característica                                      | Recomendação                  | Justificativa                                                                                                    |
+| --------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **Time pequeno (≤ 5 devs)**                         | Empate orquestrado / Temporal | Coreografia exige discipline de eventos; com time pequeno qualquer disciplina vira gargalo de uma pessoa.        |
+| **Time médio (6-15 devs), múltiplos squads**        | RabbitMQ coreografado         | Cada squad opera seu serviço; coreografia maximiza desacoplamento; sem orquestrador central como gargalo.        |
+| **Time grande (15+ devs) com tooling maduro**       | **Temporal**                  | Investimento em determinismo/lib interna se amortiza; observabilidade out-of-the-box vence custo de aprendizado. |
+| **Time sem expertise prévia em filas/event-driven** | **Temporal Cloud**            | Curva de RabbitMQ + lib interna é maior que aprender Temporal. Cloud abstrai operação.                           |
+| **Time AWS-native, com expertise Step Functions**   | **Step Functions**            | Re-aproveitar conhecimento existente vence ganho marginal de outros.                                             |
 
 ### 4.4 Por característica de infraestrutura
 
-| Característica                                                   | Recomendação                  | Justificativa                                                                                                  |
-| ---------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **Stack monolítica em MariaDB**                                  | RabbitMQ (qualquer modelo)    | Reusa banco existente; Temporal exige 2º SGBD (MySQL 8 ou Postgres — `findings-temporal.md` §2.2.6).            |
-| **Stack já em MySQL 8 ou Postgres**                              | Empate Temporal / RabbitMQ    | Sem custo de SGBD adicional; decisão por outros eixos.                                                         |
-| **Multi-DC ativo-ativo obrigatório**                             | Temporal com Cassandra        | Único combo com primitivas multi-DC nativas.                                                                   |
-| **Sem capacidade SRE para operar Postgres+ES self-hosted**       | **Temporal Cloud**            | Cloud absorve operação. Custo financeiro vira aceitável pelo zero-overhead operacional.                        |
-| **Budget cloud apertado**                                        | RabbitMQ self-hosted          | ~$2.4-4.8k/12 meses vs ~$58k/ano de Temporal Cloud em escala.                                                  |
-| **Step Functions free tier suficiente (≤ 4k transições/mês)**    | **Step Functions**            | Custo zero até esse limite; cobrança previsível; lock-in AWS aceitável se já é stack AWS.                      |
+| Característica                                                | Recomendação               | Justificativa                                                                                        |
+| ------------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Stack monolítica em MariaDB**                               | RabbitMQ (qualquer modelo) | Reusa banco existente; Temporal exige 2º SGBD (MySQL 8 ou Postgres — `findings-temporal.md` §2.2.6). |
+| **Stack já em MySQL 8 ou Postgres**                           | Empate Temporal / RabbitMQ | Sem custo de SGBD adicional; decisão por outros eixos.                                               |
+| **Multi-DC ativo-ativo obrigatório**                          | Temporal com Cassandra     | Único combo com primitivas multi-DC nativas.                                                         |
+| **Sem capacidade SRE para operar Postgres+ES self-hosted**    | **Temporal Cloud**         | Cloud absorve operação. Custo financeiro vira aceitável pelo zero-overhead operacional.              |
+| **Budget cloud apertado**                                     | RabbitMQ self-hosted       | ~$2.4-4.8k/12 meses vs ~$58k/ano de Temporal Cloud em escala.                                        |
+| **Step Functions free tier suficiente (≤ 4k transições/mês)** | **Step Functions**         | Custo zero até esse limite; cobrança previsível; lock-in AWS aceitável se já é stack AWS.            |
 
 ### 4.5 Como navegar a árvore
 

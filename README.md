@@ -8,14 +8,14 @@ A pergunta não é "qual ferramenta resolve um caso pontual?", mas **qual modelo
 
 A conclusão consolidada é uma **árvore de decisão**, não uma escolha única (detalhe em `docs/recomendacao-saga.md` §9.1):
 
-| Ferramenta × Modelo                | Latência p99 | Throughput | Vence quando…                                                                                                |
-| ---------------------------------- | ------------ | ---------- | ------------------------------------------------------------------------------------------------------------ |
-| RabbitMQ + lib **orquestrada**     | 23.8 ms      | ~46/s      | fluxo médio (4-7 steps), poucos serviços, time pequeno, sem requisito de audit trail estrito                  |
-| RabbitMQ + lib **coreografada**    | 20.4 ms      | ~94/s      | fluxo curto (≤3 steps), múltiplos squads desacoplados, requisito de latência baixa, throughput burst alto    |
-| **Temporal**                       | 351.2 ms     | ~7.4/s     | fluxo longo (8+ steps) ou aninhado, audit trail/replay obrigatório, deploys frequentes com sagas em voo      |
-| **AWS Step Functions**             | ~2092 ms*    | ~7.5/s     | já em stack AWS-native, free tier (≤4k transições/mês) suficiente, lock-in aceitável                          |
+| Ferramenta × Modelo             | Latência p99 | Throughput | Vence quando…                                                                                             |
+| ------------------------------- | ------------ | ---------- | --------------------------------------------------------------------------------------------------------- |
+| RabbitMQ + lib **orquestrada**  | 23.8 ms      | ~46/s      | fluxo médio (4-7 steps), poucos serviços, time pequeno, sem requisito de audit trail estrito              |
+| RabbitMQ + lib **coreografada** | 20.4 ms      | ~94/s      | fluxo curto (≤3 steps), múltiplos squads desacoplados, requisito de latência baixa, throughput burst alto |
+| **Temporal**                    | 351.2 ms     | ~7.4/s     | fluxo longo (8+ steps) ou aninhado, audit trail/replay obrigatório, deploys frequentes com sagas em voo   |
+| **AWS Step Functions**          | ~2092 ms\*   | ~7.5/s     | já em stack AWS-native, free tier (≤4k transições/mês) suficiente, lock-in aceitável                      |
 
-*Step Functions medido em LocalStack — números absolutos não refletem AWS real, mas o ranking relativo se sustenta.
+\*Step Functions medido em LocalStack — números absolutos não refletem AWS real, mas o ranking relativo se sustenta.
 
 Achados estruturais que não mudam conforme o cenário:
 

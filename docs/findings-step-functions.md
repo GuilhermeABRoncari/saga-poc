@@ -72,14 +72,14 @@ Step Functions entrega observabilidade rica em AWS real (próxima do Temporal We
 
 ## 4. Esforço para observabilidade aceitável (estimativa)
 
-| Componente        | Esforço estimado                                    | Comparação                          |
-| ----------------- | --------------------------------------------------- | ----------------------------------- |
-| Métricas básicas  | grátis (CloudWatch)                                 | RabbitMQ: 4-6h                      |
-| Timeline visual   | grátis (Step Functions Console em AWS real)        | RabbitMQ: 1 dia                     |
-| Replay/postmortem | via getExecutionHistory + reproduzir manualmente    | Temporal: grátis                    |
-| Alerta de falha   | ~15 lines YAML CloudWatch Alarm + SNS               | similar a Temporal                  |
-| Search/filter     | via `listExecutions` filters                        | similar a Temporal                  |
-| **Total**         | **~0.5 dia** (em AWS real)                          | RabbitMQ ~3-5 dias; Temporal ~1 dia |
+| Componente        | Esforço estimado                                 | Comparação                          |
+| ----------------- | ------------------------------------------------ | ----------------------------------- |
+| Métricas básicas  | grátis (CloudWatch)                              | RabbitMQ: 4-6h                      |
+| Timeline visual   | grátis (Step Functions Console em AWS real)      | RabbitMQ: 1 dia                     |
+| Replay/postmortem | via getExecutionHistory + reproduzir manualmente | Temporal: grátis                    |
+| Alerta de falha   | ~15 lines YAML CloudWatch Alarm + SNS            | similar a Temporal                  |
+| Search/filter     | via `listExecutions` filters                     | similar a Temporal                  |
+| **Total**         | **~0.5 dia** (em AWS real)                       | RabbitMQ ~3-5 dias; Temporal ~1 dia |
 
 Custo de observabilidade no Step Functions é baixo, mas amarrado ao stack AWS.
 
@@ -193,25 +193,25 @@ Comparação:
 
 ## 10. Comparação direta com RabbitMQ e Temporal
 
-| Critério                                    | RabbitMQ              | Temporal                                   | Step Functions                                        | Quem ganha                             |
-| ------------------------------------------- | --------------------- | ------------------------------------------ | ----------------------------------------------------- | -------------------------------------- |
-| LOC totais (PHP, sem bench)                 | 632                   | 237                                        | ~440                                                  | **Temporal**                           |
-| LOC do "workflow"                           | 381                   | 77                                         | 119 (ASL)                                             | **Temporal**                           |
-| Setup local 1ª vez                          | ~2 min                | ~25 min                                    | ~2 min                                                | **RabbitMQ / Step Functions** (empate) |
-| Composer deps                               | 3                     | 3                                          | 2                                                     | **Step Functions** (marginal)          |
-| Containers                                  | 5                     | 7                                          | 5                                                     | empate                                 |
-| Throughput burst (100 sagas)                | 48/s                  | 28/s                                       | **10.9/s**                                            | **RabbitMQ**                           |
-| Throughput sustentado                       | 9.7/s                 | 9.5/s                                      | **7.5/s**                                             | RabbitMQ/Temporal                      |
-| Latência fim-a-fim p99                      | **22ms**              | 351ms                                      | **2092ms**                                            | **RabbitMQ**                           |
-| Resiliência a infra failure                 | workers caem          | retoma                                     | LocalStack perdeu state                               | **Temporal**                           |
-| Compensação paralela                        | por arquitetura       | 1 LOC switch                               | exige rewrite ASL para Parallel state                 | **Temporal**                           |
-| Observabilidade default                     | logs                  | Temporal Web UI                            | Step Functions Console (AWS real)                     | **Temporal / Step Functions**          |
-| Postmortem                                  | 2-15 min              | 30s-1min                                   | via API/Console                                       | **Temporal / Step Functions**          |
-| Versionamento — sagas em voo                | silent corruption     | panic LOUD                                 | silent migration (LocalStack) / pinning (AWS real)    | **Temporal**                           |
-| Lock-in                                     | AMQP padrão           | moderado                                   | profundo (AWS)                                        | **RabbitMQ**                           |
-| Custo financeiro 12 meses (volume agregado) | ~$3k + 17-23 dias eng | ~$58k Cloud / ~$5k self-host + 15 dias eng | ~$51k                                                 | **RabbitMQ / Temporal self-host**      |
-| Operação                                    | clustering            | cluster ou Cloud                           | zero ops (managed)                                    | **Step Functions**                     |
-| Bus factor                                  | lib interna           | SDK público                                | AWS oficial                                           | **Step Functions**                     |
+| Critério                                    | RabbitMQ              | Temporal                                   | Step Functions                                     | Quem ganha                             |
+| ------------------------------------------- | --------------------- | ------------------------------------------ | -------------------------------------------------- | -------------------------------------- |
+| LOC totais (PHP, sem bench)                 | 632                   | 237                                        | ~440                                               | **Temporal**                           |
+| LOC do "workflow"                           | 381                   | 77                                         | 119 (ASL)                                          | **Temporal**                           |
+| Setup local 1ª vez                          | ~2 min                | ~25 min                                    | ~2 min                                             | **RabbitMQ / Step Functions** (empate) |
+| Composer deps                               | 3                     | 3                                          | 2                                                  | **Step Functions** (marginal)          |
+| Containers                                  | 5                     | 7                                          | 5                                                  | empate                                 |
+| Throughput burst (100 sagas)                | 48/s                  | 28/s                                       | **10.9/s**                                         | **RabbitMQ**                           |
+| Throughput sustentado                       | 9.7/s                 | 9.5/s                                      | **7.5/s**                                          | RabbitMQ/Temporal                      |
+| Latência fim-a-fim p99                      | **22ms**              | 351ms                                      | **2092ms**                                         | **RabbitMQ**                           |
+| Resiliência a infra failure                 | workers caem          | retoma                                     | LocalStack perdeu state                            | **Temporal**                           |
+| Compensação paralela                        | por arquitetura       | 1 LOC switch                               | exige rewrite ASL para Parallel state              | **Temporal**                           |
+| Observabilidade default                     | logs                  | Temporal Web UI                            | Step Functions Console (AWS real)                  | **Temporal / Step Functions**          |
+| Postmortem                                  | 2-15 min              | 30s-1min                                   | via API/Console                                    | **Temporal / Step Functions**          |
+| Versionamento — sagas em voo                | silent corruption     | panic LOUD                                 | silent migration (LocalStack) / pinning (AWS real) | **Temporal**                           |
+| Lock-in                                     | AMQP padrão           | moderado                                   | profundo (AWS)                                     | **RabbitMQ**                           |
+| Custo financeiro 12 meses (volume agregado) | ~$3k + 17-23 dias eng | ~$58k Cloud / ~$5k self-host + 15 dias eng | ~$51k                                              | **RabbitMQ / Temporal self-host**      |
+| Operação                                    | clustering            | cluster ou Cloud                           | zero ops (managed)                                 | **Step Functions**                     |
+| Bus factor                                  | lib interna           | SDK público                                | AWS oficial                                        | **Step Functions**                     |
 
 **Score qualitativo:**
 

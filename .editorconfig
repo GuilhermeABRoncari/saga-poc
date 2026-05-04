@@ -1,0 +1,24 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+max_line_length = 120
+
+[*.md]
+# Não recortar trailing whitespace em markdown — dois espaços no fim de linha
+# são um break significativo (<br>) na sintaxe.
+trim_trailing_whitespace = false
+
+[*.{php,phtml}]
+indent_size = 4
+
+[Makefile]
+indent_style = tab
+
+[*.{yml,yaml}]
+indent_size = 2

@@ -1,0 +1,21 @@
+# Dependências e build artifacts
+**/vendor/
+**/node_modules/
+**/storage/
+**/*.lock
+composer.lock
+
+# SQLite
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
+
+# Logs
+**/*.log
+
+# Git
+.git/
+
+# Lockfiles geradas que mudam de vendor pra vendor
+package-lock.json
+yarn.lock

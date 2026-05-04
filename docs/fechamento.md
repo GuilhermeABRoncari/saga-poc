@@ -27,8 +27,8 @@ A primeira iteração comparou três modelos **orquestrados**: RabbitMQ + lib in
 
 20 testes Tier 1-6 cobrindo:
 
-| Tier                        | Foco                                                                  |
-| --------------------------- | --------------------------------------------------------------------- |
+| Tier                        | Foco                                                                   |
+| --------------------------- | ---------------------------------------------------------------------- |
 | 1 — Alto valor, baixo custo | Versionamento, at-least-once, burst, falha de persistência, getVersion |
 | 2 — Lacunas grandes         | Dashboard, alerta, compensação paralela, blind dev                     |
 | 3 — Operacional             | Setup novo dev, footprint idle, sustained load, postmortem             |
@@ -134,12 +134,12 @@ A matriz fica registrada como **3 ferramentas × 2 modelos = 4 combinações tes
 
 ## 6. Como a recomendação evoluiu
 
-| Momento                  | Forma da recomendação                                                                                       |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| Pré-PoC (narrativa)      | "Temporal por durable execution + audit trail." Baseado em marketing, sem evidência.                        |
-| Fim da iteração 1        | "Temporal para SAGA orquestrada." Baseado em 20 testes; viés do ramo único reconhecido como ressalva.       |
-| Pré-review               | **Reaberta.** "Falta a 4ª PoC; comparar como árvore de decisão, não escolha única."                         |
-| Fim da iteração 2 (atual)| Árvore de decisão por cenário: fluxo curto + multi-squad → coreografia; fluxo longo + audit → Temporal; AWS-native + free tier → Step Functions; orquestração média → RabbitMQ orquestrado com mitigações de T5.1. |
+| Momento                   | Forma da recomendação                                                                                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pré-PoC (narrativa)       | "Temporal por durable execution + audit trail." Baseado em marketing, sem evidência.                                                                                                                               |
+| Fim da iteração 1         | "Temporal para SAGA orquestrada." Baseado em 20 testes; viés do ramo único reconhecido como ressalva.                                                                                                              |
+| Pré-review                | **Reaberta.** "Falta a 4ª PoC; comparar como árvore de decisão, não escolha única."                                                                                                                                |
+| Fim da iteração 2 (atual) | Árvore de decisão por cenário: fluxo curto + multi-squad → coreografia; fluxo longo + audit → Temporal; AWS-native + free tier → Step Functions; orquestração média → RabbitMQ orquestrado com mitigações de T5.1. |
 
 A trajetória é o que esperávamos de um estudo honesto: começou em narrativa, virou evidência, foi corrigida ao perceber viés, e fechou em recomendação contextual.
 
