@@ -6,7 +6,7 @@ Implementação do **mesmo workflow de referência** do `saga-rabbitmq` usando T
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  Temporal Server (auto-setup, Postgres dentro)                   │
+│  Temporal Server (auto-setup, MariaDB dentro)                    │
 │  Task queues: saga-orchestrator, service-a, service-b            │
 └─────────────────────────────┬────────────────────────────────────┘
                               │ gRPC

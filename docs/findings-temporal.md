@@ -17,7 +17,7 @@ PoC vivo: [`../saga-temporal/`](../saga-temporal/).
 | LOC dos 4 scripts em `bin/`                                            | 64                                                    | 140                                       |
 | LOC de config (Dockerfile + .rr.yaml + composer.json + docker-compose) | 125                                                   | 80                                        |
 | Composer deps                                                          | 3 (`temporal/sdk`, `spiral/roadrunner-cli`, ext-grpc) | 3                                         |
-| Containers Docker                                                      | **6** (postgres + temporal + UI + 3 workers)          | 4 (rabbitmq + 3 processos)                |
+| Containers Docker                                                      | **6** (mariadb + temporal + UI + 3 workers)           | 4 (rabbitmq + 3 processos)                |
 | Tempo do primeiro `docker compose up --build`                          | **~25 min** (PECL grpc compile)                       | ~2 min                                    |
 | Build incremental após cache                                           | < 30s                                                 | < 30s                                     |
 
@@ -171,7 +171,7 @@ Empate qualitativo. Temporal vence em primeira leitura, RabbitMQ vence em "como 
 - Estado do workflow vive no Temporal server.
 - Workers podem morrer todos. Workflow continua "vivo" no server, esperando worker.
 - Quando qualquer worker volta, pega decision tasks pendentes e continua.
-- Para perder workflow, seria necessário perder Postgres + não ter backup — catástrofe operacional do server, não preocupação do dev.
+- Para perder workflow, seria necessário perder o MariaDB + não ter backup — catástrofe operacional do server, não preocupação do dev.
 
 **Comparação com RabbitMQ:** órfãs no RabbitMQ+lib são preocupação real e exigem `resumeStuckSagas()` no boot do orchestrator (estimativa: 1-2 dias). **Em Temporal, gap não existe.**
 
@@ -182,16 +182,16 @@ Empate qualitativo. Temporal vence em primeira leitura, RabbitMQ vence em "como 
 | Aspecto                | Observação                                                                                                             |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | Setup local            | `docker compose up --build -d` no primeiro run leva ~25 min (PECL grpc compile)                                        |
-| Containers em produção | Temporal: 4 serviços (Frontend/History/Matching/Worker) + Postgres + opcional Elasticsearch                            |
+| Containers em produção | Temporal: 4 serviços (Frontend/History/Matching/Worker) + MariaDB/MySQL + opcional Elasticsearch                       |
 | Cloud option           | Temporal Cloud Free → Essentials ($100/mês) → Growth ($200/mês) → custo escala com actions                             |
-| Self-host EKS          | Helm chart oficial + Aurora (managed Postgres) + opcional OpenSearch                                                   |
+| Self-host EKS          | Helm chart oficial + Aurora (managed MySQL/MariaDB-compatível) + opcional OpenSearch                                   |
 | Self-host Swarm        | **Não suportado oficialmente** — viável só Cloud em ambiente Swarm                                                     |
 | Healthcheck            | Resolvido com `tctl cluster health` no service temporal + `depends_on: condition: service_healthy` nos workers/alerter |
 | Logs                   | Pelo SDK PHP, via stdout do worker — fácil de integrar com qualquer log aggregator                                     |
 
 ### 7.1 Volume de escritas no banco — medido em 2026-04-30
 
-Critério levantado pelo tech lead após observar 31+ inserções por workflow em `laravel-workflow`. Medição direta no Postgres do `saga-temporal` (1 saga isolada, contagem antes/depois em todas as tabelas):
+Critério levantado pelo tech lead após observar 31+ inserções por workflow em `laravel-workflow`. Medição direta no MariaDB do `saga-temporal` (1 saga isolada, contagem antes/depois em todas as tabelas):
 
 | Cenário              | INSERTs por saga | Detalhamento                                                                                          |
 | -------------------- | ---------------- | ----------------------------------------------------------------------------------------------------- |

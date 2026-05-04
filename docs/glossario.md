@@ -49,7 +49,7 @@
 | **At-least-once delivery**  | Garantia de que cada mensagem será entregue **pelo menos uma vez** — pode haver duplicação. Default do RabbitMQ.                                                                | `findings-rabbitmq.md` §6.3, `consideracoes.md` §1.2.2. |
 | **Exactly-once execution**  | Garantia mais forte: cada operação executa **exatamente uma vez**. Temporal entrega via event sourcing + workflow determinismo.                                                 | `consideracoes.md` §2.1.3.                              |
 | **Durable execution**       | Capacidade de uma plataforma de preservar estado de workflows através de crashes/restarts. Estado vive no engine, não nos workers.                                              | `consideracoes.md` §2.1.2.                              |
-| **Event sourcing**          | Padrão onde estado é derivado de uma sequência append-only de eventos. Temporal armazena history events em Postgres/Cassandra e reconstroi state por replay.                    | `findings-temporal.md`.                                 |
+| **Event sourcing**          | Padrão onde estado é derivado de uma sequência append-only de eventos. Temporal armazena history events em MariaDB/Cassandra e reconstroi state por replay.                     | `findings-temporal.md`.                                 |
 | **Determinismo (workflow)** | Propriedade de que o mesmo input produz a mesma sequência de comandos. Temporal exige isso para replay funcionar — proíbe `date()`, `rand()`, `PDO`, `Http::` em workflow code. | `consideracoes.md` §2.2.1.                              |
 | **Replay**                  | Re-execução do workflow code contra o history de eventos para reconstruir state quando worker reinicia ou nova decision task chega.                                             | `findings-temporal.md`.                                 |
 | **Heartbeat**               | Sinal periódico que activity envia ao server informando "estou viva". Sem heartbeat, server declara timeout.                                                                    | `findings-temporal.md`.                                 |
@@ -87,7 +87,7 @@
 | **EKS**              | **Elastic Kubernetes Service** — Kubernetes managed da AWS.                                                     | `recomendacao-saga.md`.       |
 | **Helm**             | Package manager para Kubernetes; chart oficial Temporal usa Helm.                                               | `consideracoes.md` §2.2.5.    |
 | **Healthcheck**      | Endpoint ou comando que confirma se um serviço está pronto para receber tráfego.                                | `findings-temporal.md` bug 3. |
-| **Aurora**           | Serviço de Postgres/MySQL managed da AWS, recomendado para self-host EKS de Temporal.                           | `recomendacao-saga.md`.       |
+| **Aurora**           | Serviço de MySQL/MariaDB-compatível managed da AWS, recomendado para self-host EKS de Temporal.                 | `recomendacao-saga.md`.       |
 | **OpenSearch**       | Fork do Elasticsearch managed pela AWS. Temporal usa para indexação avançada.                                   | `consideracoes.md`.           |
 | **CloudWatch**       | Logs/métricas managed da AWS.                                                                                   | `recomendacao-saga.md` §2.3.  |
 | **X-Ray**            | Tracing distribuído da AWS.                                                                                     | `recomendacao-saga.md` §2.3.  |
@@ -118,7 +118,7 @@
 
 | Termo                                           | Significado                                                                                                              |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **PDO**                                         | **PHP Data Objects** — abstração de DB do PHP. Usado na PoC RabbitMQ para SQLite/Postgres/MySQL.                         |
+| **PDO**                                         | **PHP Data Objects** — abstração de DB do PHP. Usado na PoC RabbitMQ para SQLite/MariaDB.                                |
 | **WAL**                                         | **Write-Ahead Logging** — modo de SQLite que permite leituras concorrentes com 1 writer. Habilitado em T6.2.             |
 | **PRAGMA busy_timeout**                         | Diretiva SQLite que define quanto tempo (ms) esperar antes de falhar em "database is locked".                            |
 | **opcache**                                     | Cache de bytecode do PHP. Habilitado em FPM, desabilitado em CLI por default.                                            |

@@ -44,21 +44,24 @@ Antes de mexer no `marketplace-api`, replicar o `saga-temporal/docker-compose.ym
 
 ```yaml
 services:
-  postgresql-temporal:
-    image: postgres:16-alpine
+  mariadb-temporal:
+    image: mariadb:11.4
     environment:
-      POSTGRES_PASSWORD: temporal
-      POSTGRES_USER: temporal
-    volumes: ["temporal-pg:/var/lib/postgresql/data"]
+      MARIADB_ROOT_PASSWORD: temporal
+      MARIADB_USER: temporal
+      MARIADB_PASSWORD: temporal
+      MARIADB_DATABASE: temporal
+    volumes: ["temporal-mariadb:/var/lib/mysql"]
 
   temporal:
     image: temporalio/auto-setup:1.26
-    depends_on: [postgresql-temporal]
+    depends_on: [mariadb-temporal]
     environment:
-      DB: postgres12
-      POSTGRES_SEEDS: postgresql-temporal
-      POSTGRES_USER: temporal
-      POSTGRES_PWD: temporal
+      DB: mysql8
+      DB_PORT: 3306
+      MYSQL_SEEDS: mariadb-temporal
+      MYSQL_USER: temporal
+      MYSQL_PWD: temporal
     ports: ["7233:7233"]
     healthcheck:
       test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
@@ -74,7 +77,7 @@ services:
     ports: ["8088:8080"]
 
 volumes:
-  temporal-pg:
+  temporal-mariadb:
 ```
 
 > **Importante**: o healthcheck no service `temporal` é necessário porque a imagem `temporalio/auto-setup` leva ~10-15s para inicializar (cria namespace `default`, sobe os 4 serviços internos). Sem ele, workers que usam `depends_on: temporal` partem antes do gRPC estar respondendo e morrem com `connection refused`. Os services de worker (Fase 3) devem usar `depends_on: temporal: condition: service_healthy` — bug encontrado durante o PoC e documentado em `findings-temporal.md` §1.3.

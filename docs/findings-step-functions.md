@@ -141,7 +141,7 @@ Mesmo padrão de Temporal — workers stateless, podem morrer e voltar; tasks fi
 
 **Comparação:**
 
-- Temporal (T1.4): sobreviveu a 30s de Postgres parado, retomou normalmente.
+- Temporal (T1.4): sobreviveu a 30s de MariaDB parado, retomou normalmente.
 - RabbitMQ (T1.4): workers caíram com broker; após restart manual, mensagens em queue durable foram processadas.
 - Step Functions/LocalStack: perda total de state — **arquitetonicamente possível recuperar em AWS real, mas no nosso ambiente local impossível**.
 

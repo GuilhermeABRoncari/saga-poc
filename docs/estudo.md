@@ -136,7 +136,7 @@ yield $saga->compensate();
 ### Operacional
 
 - 4 serviços internos: Frontend, History, Matching, Worker.
-- Persistence: PostgreSQL/MySQL/Cassandra + Elasticsearch (opcional).
+- Persistence: MariaDB/MySQL/PostgreSQL/Cassandra + Elasticsearch (opcional).
 - Docker Swarm NÃO suportado oficialmente — Kubernetes ou Temporal Cloud.
 - Dev local: `temporal server start-dev` (single binary, zero deps).
 - Temporal Cloud: Free tier → Essentials ~$100/mês → Growth ~$200/mês.

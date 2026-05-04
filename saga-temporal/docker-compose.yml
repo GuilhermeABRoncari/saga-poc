@@ -1,11 +1,13 @@
 services:
-  postgresql:
-    image: postgres:16-alpine
+  mariadb:
+    image: mariadb:11.4
     environment:
-      POSTGRES_PASSWORD: temporal
-      POSTGRES_USER: temporal
+      MARIADB_ROOT_PASSWORD: temporal
+      MARIADB_USER: temporal
+      MARIADB_PASSWORD: temporal
+      MARIADB_DATABASE: temporal
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "temporal"]
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -13,14 +15,14 @@ services:
   temporal:
     image: temporalio/auto-setup:1.26
     depends_on:
-      postgresql:
+      mariadb:
         condition: service_healthy
     environment:
-      DB: postgres12
-      DB_PORT: 5432
-      POSTGRES_USER: temporal
-      POSTGRES_PWD: temporal
-      POSTGRES_SEEDS: postgresql
+      DB: mysql8
+      DB_PORT: 3306
+      MYSQL_USER: temporal
+      MYSQL_PWD: temporal
+      MYSQL_SEEDS: mariadb
     ports:
       - "7233:7233"
     healthcheck:

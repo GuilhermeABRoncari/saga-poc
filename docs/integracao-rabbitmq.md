@@ -41,7 +41,7 @@ Premissas em vigor:
        └── 2026_xx_xx_create_saga_states_table.php
    ```
 
-3. **Storage de estado da saga**: tabela `saga_states` no MySQL principal do `marketplace-api` (ou Postgres dedicado). Schema mínimo:
+3. **Storage de estado da saga**: tabela `saga_states` no MariaDB principal do `marketplace-api` (ou MariaDB dedicado). Schema mínimo:
 
    ```sql
    CREATE TABLE saga_states (

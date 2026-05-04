@@ -103,7 +103,7 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 - RoadRunner obrigatório nos workers — runtime extra para cada app que orquestra.
 - Restrições de determinismo (proibido `date()`, `sleep()`, `rand()`, DB, HTTP em workflow code) são contraintuitivas para time Laravel-first; risco de bugs sutis.
 - Workflow versioning com `Workflow::getVersion()` adiciona complexidade em deploys.
-- Custo Temporal Cloud cresce com volume; self-hosted exige Postgres + Elasticsearch + 4 serviços (Frontend/History/Matching/Worker).
+- Custo Temporal Cloud cresce com volume; self-hosted exige MariaDB + Elasticsearch + 4 serviços (Frontend/History/Matching/Worker).
 
 **O que o PoC precisa medir:**
 
@@ -235,7 +235,7 @@ A pergunta concreta cuja resposta calibra peso final do achado mais sério (T5.1
 20 testes Tier 1-6 executados confirmaram empiricamente:
 
 1. **T5.1 (silent corruption sob reordenamento de steps) — achado mais grave:** RabbitMQ-PoC marca saga `COMPLETED` com state corrompido (estoque 2x, pagamento perdido) sob mudança comum (reordenar steps em deploy). Temporal panic LOUD com mensagem clara. Em 4 sistemas durante anos, esquecimento humano é certeza cumulativa.
-2. **T1.4 + T4.1 (durable execution):** Temporal sobreviveu a 30s de Postgres caído + 10s de network outage; RabbitMQ-PoC: 3 workers caíram juntos com broker, sem reconexão automática.
+2. **T1.4 + T4.1 (durable execution):** Temporal sobreviveu a 30s de MariaDB caído + 10s de network outage; RabbitMQ-PoC: 3 workers caíram juntos com broker, sem reconexão automática.
 3. **T3.4 (postmortem rico):** Temporal entrega payloads de entrada e saída de cada step automaticamente; RabbitMQ-PoC só persiste `result` da lib — payloads de entrada são perdidos para sempre.
 4. **T4.4 (timeout vs error):** Temporal classifica 4 tipos distintos; RabbitMQ-PoC não tem conceito de timeout — handler travado bloqueia consumer.
 5. **T2.2 (cobertura automática de falhas):** Temporal classifica `Failed` para qualquer caminho de falha terminal; RabbitMQ-PoC exige código explícito por caminho (~3-5 dias eng + disciplina permanente).

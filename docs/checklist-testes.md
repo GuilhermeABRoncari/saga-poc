@@ -76,25 +76,25 @@
   - Tempo total até 100 COMPLETED: **3569ms** (~28 sagas/s)
   - Tempo após fire: **2744ms**
   - Falhas: 0
-  - Memória total stack após teste: **~629 MB** (postgres 149 + temporal 156 + ui 27 + workers 96+99+102)
+  - Memória total stack após teste: **~629 MB** (mariadb 149 + temporal 156 + ui 27 + workers 96+99+102)
 - **Comparação:**
   - **Throughput:** RabbitMQ ~1.7x mais rápido (48 vs 28 sagas/s).
   - **Memória:** Temporal ~3.4x mais pesado em RAM total da stack.
-  - **Overhead da plataforma:** Temporal paga gRPC + decision tasks + history persistence em Postgres; RabbitMQ é `publish + consume + UPDATE SQLite` direto.
+  - **Overhead da plataforma:** Temporal paga gRPC + decision tasks + history persistence em MariaDB; RabbitMQ é `publish + consume + UPDATE SQLite` direto.
   - Para 4 sistemas com volume agregado < 100 sagas/min: **ambos são adequados**. Throughput não é diferencial real no nosso volume esperado.
 - **Notas:**
   - p50/p95/p99 individuais não medidos (script atual só captura wall clock total). Para conseguir percentis, modificar trigger para timestampar cada saga.
   - Memória idle pré-teste não capturada — útil para Tier 3 (T3.2).
 
-### T1.4 Falha do Postgres do Temporal mid-flight (e análogo RabbitMQ)
+### T1.4 Falha do MariaDB do Temporal mid-flight (e análogo RabbitMQ)
 
 - [x] **Executado em 2026-04-29.**
-- **Como executou (Temporal):** `SLOW_RESERVE_STOCK=15`, disparou saga, `docker stop saga-temporal-postgresql-1` aos 4s, esperou 30s, restartou Postgres.
-- **Como executou (RabbitMQ — análogo):** mesma saga lenta, mas matando RabbitMQ broker em vez de Postgres aos 4s, esperou 30s, restartou.
+- **Como executou (Temporal):** `SLOW_RESERVE_STOCK=15`, disparou saga, `docker stop saga-temporal-mariadb-1` aos 4s, esperou 30s, restartou MariaDB.
+- **Como executou (RabbitMQ — análogo):** mesma saga lenta, mas matando RabbitMQ broker em vez de MariaDB aos 4s, esperou 30s, restartou.
 - **Resultado Temporal:**
-  - Saga `c384ddae…07cfe67d` completou normalmente após Postgres voltar. ✅
+  - Saga `c384ddae…07cfe67d` completou normalmente após MariaDB voltar. ✅
   - Workers Temporal continuaram rodando (ficaram em retry de gRPC).
-  - Após Postgres voltar, Temporal retomou estado e completou a saga em poucos segundos.
+  - Após MariaDB voltar, Temporal retomou estado e completou a saga em poucos segundos.
   - **Durable execution validado empiricamente.**
 - **Resultado RabbitMQ:**
   - Quando RabbitMQ caiu, **TODOS os 3 workers PHP morreram** (orchestrator, service-a, service-b) com `php-amqplib` lançando exception fatal:
@@ -258,7 +258,7 @@
 
 | Container                    | RabbitMQ stack                | Temporal stack                                    |
 | ---------------------------- | ----------------------------- | ------------------------------------------------- |
-| broker / server              | rabbitmq: **141 MB**          | postgresql: 143 MB + temporal: 78 MB = **221 MB** |
+| broker / server              | rabbitmq: **141 MB**          | mariadb: 143 MB + temporal: 78 MB = **221 MB**    |
 | ui                           | (Mgmt UI embarcada no broker) | temporal-ui: **4 MB**                             |
 | orchestrator/workflow worker | orchestrator: **6.6 MB**      | workflow-worker: **64.6 MB**                      |
 | service-a worker             | service-a: **8.2 MB**         | service-a-worker: **64.5 MB**                     |
@@ -266,7 +266,7 @@
 | alerter                      | alerter: **5.8 MB**           | alerter: **18.9 MB**                              |
 | **Total idle**               | **~170 MB**                   | **~439 MB** (~2.6x)                               |
 
-- **Comparação:** Temporal stack ~2.6x mais pesado em idle. Imagens ~6x maiores no disco. RabbitMQ tem footprint de "transport puro"; Temporal carrega Postgres + history + RoadRunner workers.
+- **Comparação:** Temporal stack ~2.6x mais pesado em idle. Imagens ~6x maiores no disco. RabbitMQ tem footprint de "transport puro"; Temporal carrega MariaDB + history + RoadRunner workers.
 - **Notas:** para devs locais com 16GB+ RAM, ambos rodam sem problema. Para CI runners com 4GB de RAM, Temporal pode forçar tuning. RabbitMQ não tem essa preocupação no nosso volume.
 
 ### T3.3 Sustained load — memory leak detection
@@ -284,12 +284,12 @@
   - Workflows disparados: **2847** em 300s (~9.5 wfs/s real)
   - Workflows COMPLETED: 2847 (0 falhas)
   - Memória durante load:
-    - postgresql: 143 → 250 MB (**+107 MB**, history events persistidos)
+    - mariadb: 143 → 250 MB (**+107 MB**, history events persistidos)
     - temporal server: 79 → 241 MB (**+162 MB**)
     - cada worker: ~64 → ~110-128 MB (+50 MB cada × 3 workers = +150 MB)
     - Total stack: 439 → ~750 MB (**+311 MB durante load**)
   - **Não voltou para baseline em 5 min após load ended** (não esperado, mas não testado por mais tempo)
-  - **Veredito: não é leak; é storage de history events (feature, não bug)**. Postgres acumula porque retention default é 7 dias para Completed. Em produção, lifecycle policy do Temporal limpa.
+  - **Veredito: não é leak; é storage de history events (feature, não bug)**. MariaDB acumula porque retention default é 7 dias para Completed. Em produção, lifecycle policy do Temporal limpa.
 - **Comparação:**
   | | RabbitMQ | Temporal |
   |---|---|---|
@@ -299,8 +299,8 @@
   | Falhas | 0 | 0 |
 - **Análise:**
   - **RabbitMQ** trata sagas como "transport ephemeral": mensagens são ackadas e removidas, SQLite tem rows leves, memória de processos volta ao normal.
-  - **Temporal** trata sagas como "audit trail durável": history events ficam em Postgres. Memória do server cresce durante load porque acumula state/cache. Cresce linear com volume — **previsível, não vazamento**.
-  - **Implicação prática:** RabbitMQ é mais leve em RAM mas perde memória de longo prazo (postmortem ruim). Temporal carrega o custo da observabilidade no Postgres. Ambos OK no volume esperado.
+  - **Temporal** trata sagas como "audit trail durável": history events ficam em MariaDB. Memória do server cresce durante load porque acumula state/cache. Cresce linear com volume — **previsível, não vazamento**.
+  - **Implicação prática:** RabbitMQ é mais leve em RAM mas perde memória de longo prazo (postmortem ruim). Temporal carrega o custo da observabilidade no MariaDB. Ambos OK no volume esperado.
 - **Notas:** não medimos file descriptors crescendo nem GC do RoadRunner explicitamente. Para validar comportamento real em produção (24h+ de carga), seria preciso teste mais longo.
 
 ### T3.4 Replay completo de saga antiga
@@ -369,8 +369,8 @@
   - Trigger script retornou exit 0 (sucesso) — usuário pensa que saga foi disparada com sucesso.
 - **Análise:**
   - PoC RabbitMQ não tem **camada de health-check** do storage. Se SQLite estiver indisponível ou em estado inconsistente, lib não detecta nem alerta.
-  - Em produção (com Postgres ou MySQL ao invés de SQLite), o cenário equivalente seria DB unreachable: `PDOException`. A lib atualmente NÃO trata exceções de DB no orchestrator daemon — provável crash silencioso.
-  - **Análogo Temporal:** se Postgres do Temporal cai, vimos em T1.4 que workers continuam, eventualmente erram, e RECUPERAM quando Postgres volta. Workflows ficam pausados, não corrompidos.
+  - Em produção (com MariaDB ao invés de SQLite), o cenário equivalente seria DB unreachable: `PDOException`. A lib atualmente NÃO trata exceções de DB no orchestrator daemon — provável crash silencioso.
+  - **Análogo Temporal:** se MariaDB do Temporal cai, vimos em T1.4 que workers continuam, eventualmente erram, e RECUPERAM quando MariaDB volta. Workflows ficam pausados, não corrompidos.
 - **Veredito:** lib RabbitMQ atual **não é robusta a falhas de storage**. Requer pelo menos:
   1. Try/catch em todas as queries com retry exponencial. (~10 LOC)
   2. Health-check periódico do DB com circuit breaker. (~30 LOC)
@@ -586,12 +586,12 @@
   | Variância | mínima (Δ4ms) | alta (Δ290ms) | RabbitMQ mais previsível |
 - **Análise:**
   - **RabbitMQ:** o "happy path" é direto: trigger → publish → consume → handler → publish event → orchestrator handle → publish next → repeat. Cada salto é local, sem rede externa. ~21ms é dominado por 3 publish + 3 consume + SQLite UPDATEs.
-  - **Temporal:** cada workflow tem overhead de gRPC roundtrip ao server + decision tasks + history persistence em Postgres + activity scheduling. ~60ms é o "preço da plataforma" no caso normal; ~350ms aparece quando há latência de processamento de decision task (worker pool não está pronto, batching de eventos).
+  - **Temporal:** cada workflow tem overhead de gRPC roundtrip ao server + decision tasks + history persistence em MariaDB + activity scheduling. ~60ms é o "preço da plataforma" no caso normal; ~350ms aparece quando há latência de processamento de decision task (worker pool não está pronto, batching de eventos).
   - Para **fluxos críticos com SLO tight** (ex.: pagamento síncrono), **RabbitMQ é claramente vantagem**. Para **fluxos batch/async** (90% dos casos de e-commerce), 60-350ms é negligenciável vs latência da chamada HTTP que segue.
 - **Veredito:** mais um critério em que RabbitMQ ganha em **performance pura**, mas a vantagem só importa para uso síncrono. Para sagas async (que são a vasta maioria), a diferença é invisível ao usuário final.
 - **Notas:**
   - O fix WAL+busy_timeout aplicado na lib é um achado paralelo: a lib **não tinha proteção contra deadlocks SQLite** sob concorrência, e isso só aparece em testes de carga. Item para a lista de débitos pré-produção (~2 LOC, mas representa "uma classe de bug que ninguém testou").
-  - Em produção com Postgres/MySQL ao invés de SQLite, o problema de lock existe mas é gerenciado pelo DB engine — ainda assim, lib precisa setar `PDO::ATTR_TIMEOUT` apropriado.
+  - Em produção com MariaDB ao invés de SQLite, o problema de lock existe mas é gerenciado pelo DB engine — ainda assim, lib precisa setar `PDO::ATTR_TIMEOUT` apropriado.
 
 ---
 

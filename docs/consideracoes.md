@@ -14,7 +14,7 @@
 > - **§2.1.5 (versionamento explícito)** confirmado em T1.5 — Temporal panic + getVersion como mitigação correta.
 > - **§3 (cruzamento)** atualizado com medições de throughput, memória, tempo de detecção de falha, profundidade de postmortem e cold start.
 > - **§4 NOVO** sobre alertas — implementação concreta do T2.2 enfraqueceu o argumento "Temporal entrega alertas grátis"; argumento que se mantém é "Temporal classifica Failed automaticamente para qualquer caminho de falha".
-> - **§5 NOVO** sobre custo de "memória de longo prazo" — T3.3 mostrou que Temporal acumula state durável em Postgres (~+311 MB sob 5 min de load) enquanto RabbitMQ é "transport ephemeral" (volta ao baseline). Não é leak — é o preço da observabilidade.
+> - **§5 NOVO** sobre custo de "memória de longo prazo" — T3.3 mostrou que Temporal acumula state durável em MariaDB (~+311 MB sob 5 min de load) enquanto RabbitMQ é "transport ephemeral" (volta ao baseline). Não é leak — é o preço da observabilidade.
 > - **§1.2.13 NOVO** sobre falta de health-check de storage — T4.2 mostrou que lib RabbitMQ trata SQLite indisponível com falha silenciosa.
 > - **§1.2.14 NOVO** sobre falta de conceito de timeout — T4.4 mostrou que handler travado em RabbitMQ bloqueia consumer indefinidamente; Temporal classifica 4 tipos de timeout distintos.
 > - **§2.1.2 (durable execution)** reforçado com T4.1 — worker Temporal sobreviveu a 10s de network outage com 0 retries.
@@ -81,7 +81,7 @@ Validado empiricamente em testes T1.3 (burst), T3.2 (idle) e T3.3 (sustained):
 - **Cold start cacheado:** RabbitMQ **~10s** até saga rodar vs Temporal **~30s** (afetado pela race condition documentada em [`findings-temporal.md`](./findings-temporal.md) §1 bug 3).
 - **Cold start sem cache (estimado):** RabbitMQ **~2-3 min** vs Temporal **~25 min** (PECL grpc compile domina).
 - **Latência de detecção de falha (alerter):** RabbitMQ **~1s** vs Temporal ~7s.
-- **Memória sob load sustentado:** RabbitMQ volta ao baseline depois do load; Temporal acumula +300 MB no Postgres (history retention — não é leak, é storage de audit trail).
+- **Memória sob load sustentado:** RabbitMQ volta ao baseline depois do load; Temporal acumula +300 MB no MariaDB (history retention — não é leak, é storage de audit trail).
 
 Para o volume esperado pelos 4 sistemas (<100 sagas/min agregadas), **ambos são adequados** em throughput. A folga operacional do RabbitMQ é maior em RAM, disco e cold start. Em cenários de pico não-previstos, RabbitMQ tem mais headroom; em cenários de devs com 4GB de RAM (CI runners, máquinas modestas), Temporal pode forçar tuning.
 
@@ -216,7 +216,7 @@ Implicações:
 
 - Em ambiente de produção com cluster RabbitMQ + quorum queues, derrubadas planejadas (rolling restart, upgrade) ou não-planejadas (split brain, deploy quebrado) param TODA a coordenação de sagas até alguém subir os workers manualmente.
 - Sagas em voo ficam stuck — mensagens permanecem em queue durable, mas sem consumer não há progresso.
-- Em Temporal o equivalente foi testado (T1.4 análogo): workers sobreviveram a 30s de Postgres caído e retomaram automaticamente quando voltou.
+- Em Temporal o equivalente foi testado (T1.4 análogo): workers sobreviveram a 30s de MariaDB caído e retomaram automaticamente quando voltou.
 
 **Mitigação:** envolver `consume()` em try/catch + loop de reconexão com backoff exponencial. Custo: ~0.5 dia de eng + testes. Não é trabalho gigante, mas é mais um item da lista "tudo que você precisa construir" da lib interna, e é **bloqueante para produção** — sem isso a lib não é viável.
 
@@ -250,7 +250,7 @@ Cada novo caminho de falha exige nova lógica de conversão na lib. Em Temporal,
 
 Validado parcialmente em **T4.2 (2026-04-29)**: ao mover o arquivo SQLite mid-flight, o orchestrator daemon ficou consultando o file descriptor antigo (arquivo já desvinculado do path), enquanto o trigger CLI criou novo arquivo vazio. Resultado: saga registrada num arquivo, daemon procurando em outro, **sem erro propagado para o usuário** — trigger retornou exit 0, daemon emitiu apenas `saga not found` em stderr.
 
-Em produção (Postgres ou MySQL ao invés de SQLite local), o cenário equivalente é "DB unreachable" → PDOException. Lib atual não trata exceções de DB no orchestrator daemon → provável crash silencioso ou loop infinito.
+Em produção (MariaDB ao invés de SQLite local), o cenário equivalente é "DB unreachable" → PDOException. Lib atual não trata exceções de DB no orchestrator daemon → provável crash silencioso ou loop infinito.
 
 **Mitigação:**
 
@@ -258,7 +258,7 @@ Em produção (Postgres ou MySQL ao invés de SQLite local), o cenário equivale
 2. Health-check periódico do DB com circuit breaker. (~30 LOC)
 3. Modo "degradado" que para de aceitar novas sagas quando storage indisponível, em vez de aceitar e perder. (~20 LOC)
 
-**Custo: ~1 dia de eng**, mais um item para a lista de débitos pré-produção. Em Temporal, a equivalente "Postgres do server caído" foi testada em T1.4 — workers continuam, eventualmente erram, e RECUPERAM quando Postgres volta sem corrupção.
+**Custo: ~1 dia de eng**, mais um item para a lista de débitos pré-produção. Em Temporal, a equivalente "MariaDB do server caído" foi testada em T1.4 — workers continuam, eventualmente erram, e RECUPERAM quando MariaDB volta sem corrupção.
 
 #### 1.2.14 Sem conceito de timeout de handler (NOVO — T4.4)
 
@@ -291,9 +291,9 @@ $this->pdo->exec('PRAGMA journal_mode = WAL');
 
 Com isso, o bench passou de exception após 100 iterations para 1000 sagas completas em 21.5s sem nenhum lock issue.
 
-**Achado paralelo importante:** este é o tipo de bug que aparece **só em testes de carga**. A lib provavelmente passaria em todos os testes de unidade e mesmo testes de integração com 1 saga por vez. Um time adotando a lib sem testar concorrência iria descobrir esse bug em produção. **Item para a lista de débitos pré-produção** — se for usar SQLite ou Postgres, configurar isolation/timeout corretos desde o dia 1.
+**Achado paralelo importante:** este é o tipo de bug que aparece **só em testes de carga**. A lib provavelmente passaria em todos os testes de unidade e mesmo testes de integração com 1 saga por vez. Um time adotando a lib sem testar concorrência iria descobrir esse bug em produção. **Item para a lista de débitos pré-produção** — se for usar SQLite ou MariaDB, configurar isolation/timeout corretos desde o dia 1.
 
-Em produção com Postgres/MySQL, deadlocks ainda existem mas são gerenciados pelo DB engine. Lib precisa setar `PDO::ATTR_TIMEOUT` apropriado e tratar `PDOException` com retry exponencial. Mais código a manter.
+Em produção com MariaDB, deadlocks ainda existem mas são gerenciados pelo DB engine. Lib precisa setar `PDO::ATTR_TIMEOUT` apropriado e tratar `PDOException` com retry exponencial. Mais código a manter.
 
 ---
 
@@ -313,7 +313,7 @@ Em produção com Postgres/MySQL, deadlocks ainda existem mas são gerenciados p
 | Health-check de storage (§1.2.13) **NOVO**               | Try/catch em queries + circuit breaker + modo degradado quando DB indisponível. Confirmado em T4.2 como gap real.                                                                                                                                                                                                                                                                                   | ~1 dia                               |
 | Conceito de timeout de handler (§1.2.14) **NOVO**        | Timeout via `pcntl_alarm` + distinção timeout/exception nos events + documentação por handler. Confirmado em T4.4 como gap real.                                                                                                                                                                                                                                                                    | ~1 dia + disciplina permanente       |
 | Alertas externos                                         | Alerter standalone (script PHP de ~40 LOC consultando `status='FAILED'` em SQLite) + integração webhook real (Slack/PagerDuty). Confirmado em T2.2.                                                                                                                                                                                                                                                 | ~0.5 dia                             |
-| Deadlock de DB sob concorrência (§1.2.15) **NOVO**       | `PRAGMA busy_timeout` + `journal_mode=WAL` (SQLite) ou `PDO::ATTR_TIMEOUT` + retry com backoff (Postgres/MySQL). Confirmado em T6.2 — fix de 2 LOC bastou para a PoC, mas em produção precisa cobertura sistemática + testes de carga.                                                                                                                                                              | ~0.5 dia + testes de carga           |
+| Deadlock de DB sob concorrência (§1.2.15) **NOVO**       | `PRAGMA busy_timeout` + `journal_mode=WAL` (SQLite) ou `PDO::ATTR_TIMEOUT` + retry com backoff (MariaDB). Confirmado em T6.2 — fix de 2 LOC bastou para a PoC, mas em produção precisa cobertura sistemática + testes de carga.                                                                                                                                                                     | ~0.5 dia + testes de carga           |
 
 **Custo total agregado para chegar a "produção responsável" (revisado pós-Tier 1+2+3+4+5+6):** **~17-23 dias de engenharia inicial** + manutenção recorrente. Tier 5 não adicionou novos custos (apenas reforçou T1.1). Tier 6 adicionou ~0.5 dia (§1.2.15). Continua viável, mas a margem encolheu mais.
 
@@ -331,13 +331,13 @@ Em produção com Postgres/MySQL, deadlocks ainda existem mas são gerenciados p
 
 #### 2.1.2 Durable execution out of the box (confirmado em T1.4 + T4.1)
 
-- Estado da saga vive no engine (event-sourced em Postgres/MySQL/Cassandra), não no nosso banco.
+- Estado da saga vive no engine (event-sourced em MariaDB/MySQL/Cassandra), não no nosso banco.
 - Sobrevive a crash de worker, restart de cluster, deploy do worker, deploy do server.
 - "Mecanismo de resume on boot" é grátis — nem existe esse conceito explícito porque o engine sempre sabe onde retomar.
 
 **Confirmações empíricas:**
 
-- **T1.4 (2026-04-29):** Postgres do Temporal foi parado por 30s mid-flight. Workflow ficou pausado. Quando Postgres voltou, workflow retomou e completou normalmente. Sem corrupção.
+- **T1.4 (2026-04-29):** MariaDB do Temporal foi parado por 30s mid-flight. Workflow ficou pausado. Quando MariaDB voltou, workflow retomou e completou normalmente. Sem corrupção.
 - **T4.1 (2026-04-29):** `service-a-worker` foi desconectado da rede por 10s durante uma activity. Activity completou no `Attempt:1` (sem retry), buffer interno do worker preservou resultado, enviado ao reconectar. Worker resilient a network blips.
 - O análogo no RabbitMQ-PoC (T1.4) mostrou comportamento dramaticamente diferente: workers caem com `AMQPProtocolConnectionException` e ficam Exited, exigindo intervenção manual. Diferença qualitativa: Temporal **sobrevive a falhas de infra sem trabalho do dev**; RabbitMQ exige código de reconexão na lib.
 
@@ -382,7 +382,7 @@ Em produção com Postgres/MySQL, deadlocks ainda existem mas são gerenciados p
 #### 2.1.7 Temporal Cloud reduz overhead inicial
 
 - Free tier para PoC; Essentials ~$100/mês até pequena escala.
-- Sem operação de cluster (Postgres + ES + 4 serviços) durante adoção.
+- Sem operação de cluster (MariaDB + ES + 4 serviços) durante adoção.
 - Saída Cloud → self-hosted depois é re-aponte de namespace, sem rewrite de código.
 
 #### 2.1.8 SDK PHP ativo e maduro o bastante
@@ -477,9 +477,9 @@ Consequências práticas:
 
 #### 2.2.5 Self-hosting é não-trivial
 
-- Cluster Temporal: 4 serviços (Frontend, History, Matching, Worker) + Postgres/MySQL + (opcional) Elasticsearch.
-- Helm chart oficial existe, mas operar persistência (Postgres) e indexação (ES) virou trabalho de SRE.
-- **Em EKS o overhead é menor** (managed Postgres via Aurora, OpenSearch managed) — mas ainda assim mais peças que RabbitMQ.
+- Cluster Temporal: 4 serviços (Frontend, History, Matching, Worker) + MariaDB/MySQL + (opcional) Elasticsearch.
+- Helm chart oficial existe, mas operar persistência (MariaDB) e indexação (ES) virou trabalho de SRE.
+- **Em EKS o overhead é menor** (managed MySQL/MariaDB-compatível via Aurora, OpenSearch managed) — mas ainda assim mais peças que RabbitMQ.
 - **Em Swarm é não-suportado oficialmente** — precisa Cloud ou EKS.
 
 #### 2.2.6 Lock-in moderado
@@ -519,7 +519,7 @@ Tabela atualizada após bateria Tier 1 + Tier 2. Itens com asterisco têm mediç
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | **Adoção rápida com time atual**                      | ✅✅                                                                                              | ⚠️ (curva inicial real)                                                                                               |
 | **Sem lock-in**                                       | ✅✅                                                                                              | ⚠️ (lock-in moderado, OSS)                                                                                            |
-| **Durable execution out-of-the-box** ⭐ T1.4          | ⚠️ (parcial; workers caem com broker e não reconectam — §1.2.10)                                  | ✅✅ (sobreviveu a 30s de Postgres caído)                                                                             |
+| **Durable execution out-of-the-box** ⭐ T1.4          | ⚠️ (parcial; workers caem com broker e não reconectam — §1.2.10)                                  | ✅✅ (sobreviveu a 30s de MariaDB caído)                                                                              |
 | **Exactly-once de activity** ⭐ T1.2                  | ⚠️ (risco condicional, não certeza — §1.2.2 revisado)                                             | ✅ (exactly-once estrutural)                                                                                          |
 | **Observabilidade visual de saga**                    | ❌ (precisa construir)                                                                            | ✅✅                                                                                                                  |
 | **Compensação first-class**                           | ⚠️ (constrói em ~30 LOC)                                                                          | ✅✅                                                                                                                  |
@@ -658,9 +658,9 @@ Se o time se compromete a **NUNCA mudar a forma de uma saga depois que ela está
 **T3.3 (2026-04-29)** rodou 5 minutos × 10 sagas/s em ambos PoCs e revelou uma assimetria estrutural:
 
 - **RabbitMQ stack:** memória cresce ~20-30 MB durante load, **volta ao baseline** quando load termina. Mensagens são ackadas e removidas; SQLite tem rows leves; processos liberam RAM.
-- **Temporal stack:** memória cresce **+311 MB** durante load — Postgres acumula history events (cada workflow gera ~10 eventos), temporal server cacheia state, workers crescem ~50 MB cada. **Não volta ao baseline** ao fim do load.
+- **Temporal stack:** memória cresce **+311 MB** durante load — MariaDB acumula history events (cada workflow gera ~10 eventos), temporal server cacheia state, workers crescem ~50 MB cada. **Não volta ao baseline** ao fim do load.
 
-**Esse não é um leak — é storage de audit trail durável.** Postgres do Temporal só limpa após o retention period (default: 7 dias para Completed). É exatamente o que torna `tctl workflow show` instantâneo dias depois (ver T3.4).
+**Esse não é um leak — é storage de audit trail durável.** O MariaDB do Temporal só limpa após o retention period (default: 7 dias para Completed). É exatamente o que torna `tctl workflow show` instantâneo dias depois (ver T3.4).
 
 **Implicações para a decisão:**
 
@@ -672,8 +672,8 @@ Se o time se compromete a **NUNCA mudar a forma de uma saga depois que ela está
 
 - Volume estimado: 100 sagas/min × 60 × 24 × 30 = ~4.3M sagas/mês.
 - Cada saga gera ~10 events × ~500 bytes = ~5 KB de history.
-- 4.3M × 5 KB = **~21 GB/mês de history** em Postgres do Temporal.
-- Retention de 7 dias: ~5 GB ativos a qualquer momento. Aurora Postgres lida sem problema.
+- 4.3M × 5 KB = **~21 GB/mês de history** no MariaDB do Temporal.
+- Retention de 7 dias: ~5 GB ativos a qualquer momento. Aurora MySQL/MariaDB-compatível lida sem problema.
 - Em RabbitMQ, o equivalente para chegar à paridade de informação seria ~21 GB/mês em ELK ou Loki — ônus do time.
 
 ---
@@ -698,7 +698,7 @@ Em comparação:
 
 - Cloud só faz sentido **durante adoção** (primeiros 6-12 meses), antes de o time ter expertise para self-host.
 - Para escala >10M actions/mês (qualquer um dos 4 sistemas, depois de adotado), **self-host EKS é a opção financeiramente sensata**.
-- O custo de "operar Temporal self-host" não é trivial — Helm chart oficial existe, mas operar Postgres + indexação ES + 4 serviços é trabalho de SRE. Vide §2.2.5 ("Self-hosting é não-trivial").
+- O custo de "operar Temporal self-host" não é trivial — Helm chart oficial existe, mas operar MariaDB + indexação ES + 4 serviços é trabalho de SRE. Vide §2.2.5 ("Self-hosting é não-trivial").
 - O argumento "Cloud reduz overhead inicial" do §2.1.7 continua válido — mas a saída Cloud → self-host depois é re-aponte de namespace + reconstrução de runbooks. Trabalho real, mas concentrado.
 
 Esse cálculo deve entrar na decisão final como **TCO de 12-24 meses**, não como "Cloud é caro abstratamente".
