@@ -68,7 +68,7 @@ Documentos de **processo**:
 
 Guias de **integração** (como adotar cada ferramenta na prática):
 
-- [`docs/integracao-rabbitmq.md`](./docs/integracao-rabbitmq.md), [`docs/integracao-temporal.md`](./docs/integracao-temporal.md), [`docs/integracao-step-functions.md`](./docs/integracao-step-functions.md).
+- [`docs/integracao-rabbitmq.md`](./docs/integracao-rabbitmq.md) (orquestrado), [`docs/integracao-rabbitmq-coreografado.md`](./docs/integracao-rabbitmq-coreografado.md) (coreografado), [`docs/integracao-temporal.md`](./docs/integracao-temporal.md), [`docs/integracao-step-functions.md`](./docs/integracao-step-functions.md).
 
 ## Como reproduzir
 
