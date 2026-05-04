@@ -1,83 +1,82 @@
-# Recomendação de ferramenta SAGA — padrão organizacional
+# Recomendação de ferramenta para SAGA — estudo comparativo
 
-> Este documento registra a **decisão sobre qual ferramenta adotar como padrão de SAGA** para os sistemas da empresa (e-commerce, logística/transporte, financeiro, estoque). É complementar ao estudo em [`estudo.md`](./estudo.md), à compreensão do padrão em [`compreensao-saga.md`](./compreensao-saga.md), e à síntese das 6 baterias de teste em [`fechamento.md`](./fechamento.md).
+> Este documento registra as recomendações derivadas de um estudo comparativo entre três abordagens para implementar o padrão SAGA em uma stack Laravel: RabbitMQ + biblioteca interna, Temporal e AWS Step Functions. É complementar ao [`fechamento.md`](./fechamento.md) (síntese das 6 baterias de teste), [`consideracoes.md`](./consideracoes.md) (prós/contras detalhados) e [`checklist-testes.md`](./checklist-testes.md) (matriz Tier 1-6).
 >
-> ## ⚠️ Status atual (2026-04-30): RECOMENDAÇÃO REABERTA
+> ## Status do estudo
 >
-> Após pré-review com o tech lead em 2026-04-30, foi identificado um **miss metodológico**: as três PoCs e a comparação Tier 1-6 mediram exclusivamente **saga orquestrada** (orquestrador central + state machine no banco). O tech lead esclareceu que sua proposta original era **saga coreografada** (sem tabela central, lib mínima detectando erros e disparando eventos de compensação consumidos por handlers idempotentes em cada serviço).
+> Este estudo é uma **comparação aberta**, sem decisão pré-fixada. Apresenta evidências para várias direções possíveis e procura orientar a escolha de SAGA por critérios técnicos mensuráveis, em vez de preferência de plataforma. Há duas iterações registradas:
 >
-> Implicações:
+> 1. **Primeira iteração (concluída):** três PoCs orquestradas (RabbitMQ + lib interna, Temporal, Step Functions/LocalStack) submetidas aos mesmos 20 testes Tier 1-6.
+> 2. **Segunda iteração (em curso):** o estudo passou a considerar **saga coreografada** (sem orquestrador central, lib mínima detectando erros e publicando eventos de compensação consumidos por handlers idempotentes em cada serviço) como caminho viável. Algumas conclusões da primeira iteração precisam ser relidas à luz desse modelo:
+>    - **T5.1** (silent corruption sob reordenamento de steps) **não se aplica** ao modelo coreografado — não há `saga_definition` central para reordenar.
+>    - A discussão sobre necessidade de tabela `saga_step` no banco assume orquestração centralizada e não é universal.
+>    - A comparação Tier 1-6 mediu apenas modelos orquestrados, portanto fica enviesada quando lida como avaliação de "todo o espaço de SAGA".
 >
-> - **T5.1** (silent corruption sob reordenamento de steps), justificativa primária da recomendação anterior, **não se aplica** ao modelo coreografado — não há saga_definition central para reordenar.
-> - A "alternativa minoritária" §7.3 (RabbitMQ + lib `mobilestock/saga` com `saga_version`) descrevia um modelo orquestrado, e a resposta do tech lead em §6 ("mínimo de responsabilidades ao dev pra manusear `saga_step` no banco") era na verdade um sinal de que **`saga_step` no banco não deveria existir** — ou seja, descartando orquestração centralizada, não descartando RabbitMQ como ferramenta.
-> - A comparação atual (Temporal × RabbitMQ-orquestrado × Step Functions) está **enviesada**: faltava o modelo coreografado.
+> Próximos passos do estudo:
 >
-> **Próximos passos antes de fechar novamente:**
->
-> 1. Construir 4ª PoC: `saga-rabbitmq-coreografado/` — sem tabela central, lib mínima de compensação por evento, handlers idempotentes em cada serviço (ver §9).
+> 1. Construir a 4ª PoC: `saga-rabbitmq-coreografado/` — sem tabela central, lib mínima de compensação por evento, handlers idempotentes (ver §10).
 > 2. Re-projetar testes Tier 1-6 para o modelo coreografado: alguns caem (T5.1), outros mudam de forma (compensação fora de ordem, evento perdido, handler não-idempotente, loops), outros se mantêm (T1.4, T3.4).
-> 3. Reformular esta recomendação como **árvore de decisão** orquestração ⇄ coreografia, não como escolha de ferramenta única. Cada padrão se aplica a casos diferentes — coreografia para fluxos chatty/desacoplados, orquestração para fluxos com estado complexo/auditoria/timeouts não-triviais.
-> 4. Clarificar com o tech lead se a posição é "(A) coreografia para este caso específico" ou "(B) coreografia como padrão organizacional único" — a resposta calibra escopo da recomendação final.
+> 3. Reformular a recomendação como **árvore de decisão** orquestração ⇄ coreografia, em vez de escolha de ferramenta única. Cada padrão se aplica a casos diferentes — coreografia para fluxos chatty/desacoplados, orquestração para fluxos com estado complexo/auditoria/timeouts não-triviais.
 >
-> Tudo abaixo desta linha é o conteúdo da recomendação fechada em 2026-04-29 e mantido como **histórico**, não como decisão vigente. Leia com a ressalva acima.
+> O conteúdo abaixo desta linha é a recomendação fechada na primeira iteração e mantida como **histórico**, não como decisão final do estudo. Leia com a ressalva acima.
 
 ---
 
 ## 1. Enquadramento
 
-A tarefa não é escolher ferramenta para um caso pontual (ex.: ativação de loja no `marketplace-api`). É **definir o padrão que será imposto a todos os sistemas** que usarão SAGA daqui pra frente. Isso muda os critérios de avaliação:
+A pergunta que o estudo persegue não é "qual ferramenta resolve um caso pontual?", mas **qual modelo + qual ferramenta servem como padrão sustentável para múltiplos serviços** que precisarão coordenar transações distribuídas. Esse enquadramento muda os critérios de avaliação:
 
-| Critério                      | Caso pontual  | Padrão organizacional                       |
-| ----------------------------- | ------------- | ------------------------------------------- |
-| Custo de adoção inicial       | Alto          | Diluído (paga uma vez, vários consumidores) |
-| Curva de aprendizado          | Custo direto  | Investimento que se amortiza                |
-| Lock-in de fornecedor         | Pouco importa | Crítico                                     |
-| Determinismo / debugabilidade | "Bom ter"     | Obrigatório (auditoria, postmortems)        |
-| Padronização entre apps       | Marginal      | É **o objetivo** da tarefa                  |
-| Substrato de execução         | Swarm hoje    | Swarm + EKS gradual (ver §1.1)              |
+| Critério                      | Caso pontual  | Padrão para múltiplos serviços             |
+| ----------------------------- | ------------- | ------------------------------------------ |
+| Custo de adoção inicial       | Alto          | Diluído (paga uma vez, vários consumidores)|
+| Curva de aprendizado          | Custo direto  | Investimento que se amortiza               |
+| Lock-in de fornecedor         | Pouco importa | Crítico                                    |
+| Determinismo / debugabilidade | "Bom ter"     | Obrigatório (auditoria, postmortems)       |
+| Padronização entre apps       | Marginal      | É **o objetivo** do estudo                 |
+| Substrato de execução         | Único hoje    | Stack híbrida por tempo indeterminado      |
 
-Escala esperada: 4 sistemas (e-commerce, logística, financeiro, estoque) interagindo entre si via SAGAs. Inevitavelmente, vão surgir fluxos do tipo: "pedido cria reserva no estoque, dispara pagamento, agenda transporte" — clássico cenário de orquestração multi-serviço.
+A arquitetura alvo do estudo envolve vários domínios que vão interagir entre si via SAGAs. Inevitavelmente surgirão fluxos do tipo: "pedido cria reserva no estoque, dispara pagamento, agenda transporte" — clássico cenário de orquestração multi-serviço.
 
-### 1.1 Premissas atualizadas (substituem versões anteriores)
+### 1.1 Premissas de infraestrutura
 
-A versão anterior deste documento partia da premissa "EKS confirmado no roadmap próximo, stack toda migra junto". Após nova conversa com o lead, a realidade é mais matizada:
+A versão inicial deste documento partia da premissa "migração para uma orquestração de containers única no roadmap próximo, stack toda migra junto". A realidade considerada agora é mais matizada:
 
-- **Migração para EKS é gradual, não em bloco.** Inicialmente apenas o `marketplace-api` vai para o EKS. Os demais sistemas continuam em Docker Swarm por tempo indeterminado.
-- **Pods no EKS conseguem acessar serviços expostos do Swarm via internet pública.** Praticamente todos os serviços já estão expostos (`marketplace-api`, `users-api`, `lookpay-api`, etc.). Exceções são serviços de infraestrutura como Redis, que não são alvo de orquestração de SAGA.
-- **Consequência prática para SAGA:** workers de orquestrador (qualquer ferramenta) podem rodar no EKS e disparar Activities que chamam APIs Laravel residentes no Swarm via HTTPS. O argumento "Temporal não roda em Swarm" deixa de ser bloqueio técnico — vira escolha de onde colocar os workers, não impedimento.
-- **Argumento "EKS evita lib interna" enfraquece.** Como a stack permanece híbrida por tempo indefinido, qualquer padrão escolhido vai conviver com Swarm por anos. A escolha precisa ser sustentável nesse cenário, não só no estado-final EKS.
+- **Migração para orquestrador novo é gradual, não em bloco.** Inicialmente apenas alguns serviços vão para o novo substrato; os demais continuam em Docker Swarm por tempo indeterminado.
+- **Pods no novo cluster acessam serviços expostos do Swarm via internet pública.** Praticamente todos os serviços relevantes para SAGA já têm endpoint exposto. Exceções são serviços de infraestrutura (cache, etc.) que não são alvo de orquestração de SAGA.
+- **Consequência prática para SAGA:** workers de orquestrador (qualquer ferramenta) podem rodar em um substrato e disparar Activities que chamam APIs HTTP residentes no outro. O argumento "Temporal não roda em Swarm" deixa de ser bloqueio técnico — vira escolha de onde colocar os workers, não impedimento.
+- **A escolha precisa ser sustentável em stack híbrida**, não apenas no estado-final.
 
-Resultado: **nenhuma das opções está descartada por critério de infra**. RabbitMQ+lib interna, Temporal (Cloud ou self-hosted) e Step Functions são todos viáveis nessa topologia híbrida.
+Resultado: **nenhuma das opções está descartada por critério de infra**. RabbitMQ + lib interna, Temporal (Cloud ou self-hosted) e Step Functions são todos viáveis nessa topologia híbrida.
 
-### 1.2 Por que a recomendação anterior estava enviesada
+### 1.2 Por que a primeira recomendação estava enviesada
 
-A versão anterior fechou em "Temporal por orquestração, Cloud → EKS self-hosted". Olhando friamente:
+A versão inicial fechou em "Temporal por orquestração, Cloud → self-hosted". Olhando friamente:
 
-- Argumentos pró-Temporal eram **derivados de marketing e feature lists** (durable execution, UI de timeline, replay determinístico) — não de experiência operando o sistema na nossa casa.
-- Argumentos contra RabbitMQ+lib interna eram **especulativos** ("disciplina permanente para manter a lib viva", "30% do que o Temporal Web entrega") — não medidos.
+- Argumentos pró-Temporal eram **derivados de marketing e feature lists** (durable execution, UI de timeline, replay determinístico) — não de experiência operando o sistema localmente.
+- Argumentos contra RabbitMQ + lib interna eram **especulativos** ("disciplina permanente para manter a lib viva", "30% do que o Temporal Web entrega") — não medidos.
 - O custo real de Temporal em Laravel (RoadRunner em workers, determinismo, SDK de segunda classe) foi reconhecido mas **subestimado** sem nunca ter sido sentido na prática.
-- O custo real de construir `mobilestock/laravel-saga` (LOC, manutenção, ergonomia) foi declarado alto **sem nenhuma referência concreta**.
+- O custo real de construir uma lib interna de saga (LOC, manutenção, ergonomia) foi declarado alto **sem nenhuma referência concreta**.
 
-Conclusão honesta: estava-se decidindo com base em narrativa, não em evidência. O lead está certo em pedir PoC antes de fechar.
+Conclusão honesta: estava-se decidindo com base em narrativa, não em evidência. As PoCs e os testes Tier 1-6 foram construídos justamente para gerar essa evidência.
 
 ## 2. Avaliação por ferramenta — estado atual
 
-> **Atualização pós-PoC (2026-04-29):** as hipóteses listadas abaixo foram validadas (ou refutadas) em 20 testes Tier 1-6. As "Hipóteses pró/contra" representam o estado pré-PoC; o resultado empírico está em [`consideracoes.md`](./consideracoes.md) §1, §2 e §3, e na síntese de [`fechamento.md`](./fechamento.md).
+> **Atualização pós-PoC:** as hipóteses listadas abaixo foram validadas (ou refutadas) em 20 testes Tier 1-6. As "Hipóteses pró/contra" representam o estado pré-PoC; o resultado empírico está em [`consideracoes.md`](./consideracoes.md) §1, §2 e §3, e na síntese de [`fechamento.md`](./fechamento.md).
 
-### 2.1 RabbitMQ + biblioteca interna `mobilestock/laravel-saga`
+### 2.1 RabbitMQ + biblioteca interna de saga
 
 **Hipóteses pró:**
 
 - Time já domina filas e Laravel; curva de aprendizado baixa para o transport.
 - Sem novo runtime (RoadRunner) nem novo modelo de execução (workflows determinísticos).
-- Controle total da API: ergonomia pode ser desenhada para o jeito Laravel da casa.
+- Controle total da API: ergonomia pode ser desenhada para o estilo Laravel.
 - Sem lock-in de fornecedor; AMQP é padrão aberto.
-- Convive bem com Swarm e EKS sem mudança de runtime.
+- Convive bem com qualquer substrato de containers sem mudança de runtime.
 
 **Hipóteses contra (a validar):**
 
 - Construir state machine + outbox + DLX + idempotência + observabilidade é trabalho recorrente.
-- Sem UI de debug equivalente à Temporal Web — precisaríamos investir em Grafana/traces customizados.
+- Sem UI de debug equivalente à Temporal Web — exigiria investir em Grafana/traces customizados.
 - "Padronização" via lib interna depende de disciplina permanente para mantê-la viva e ergonômica.
 
 **O que o PoC precisa medir:**
@@ -103,14 +102,14 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 - RoadRunner obrigatório nos workers — runtime extra para cada app que orquestra.
 - Restrições de determinismo (proibido `date()`, `sleep()`, `rand()`, DB, HTTP em workflow code) são contraintuitivas para time Laravel-first; risco de bugs sutis.
 - Workflow versioning com `Workflow::getVersion()` adiciona complexidade em deploys.
-- Custo Temporal Cloud cresce com volume; self-hosted exige MariaDB + Elasticsearch + 4 serviços (Frontend/History/Matching/Worker).
+- Custo Temporal Cloud cresce com volume; self-hosted exige Postgres ou MySQL 8 (**MariaDB não suportado** — ver §2.2.6 em `findings-temporal.md`) + Elasticsearch + 4 serviços (Frontend/History/Matching/Worker).
 
 **O que o PoC precisa medir:**
 
 - Tempo de onboarding até primeiro workflow rodando (incluindo RoadRunner).
 - Frequência de erros de determinismo durante desenvolvimento.
 - Custo de Temporal Cloud no volume estimado dos próximos 12 meses.
-- Esforço para padronizar via pacote interno (`mobilestock/laravel-temporal-saga`) escondendo as arestas do SDK.
+- Esforço para padronizar via pacote interno escondendo as arestas do SDK.
 - Comportamento real durante deploy com workflows em voo.
 
 ### 2.3 AWS Step Functions
@@ -129,13 +128,13 @@ Conclusão honesta: estava-se decidindo com base em narrativa, não em evidênci
 - Lock-in AWS profundo; migração futura ou estratégia multi-cloud exige refazer N workflows.
 - Integrações com APIs internas exigem Lambda intermediária ou HTTP Task — mais peças móveis.
 
-**Status (atualizado 2026-04-29):** descartada inicialmente, **reaberta como 3ª PoC** (`saga-step-functions/`) após decisão preliminar pró-Temporal. Executada em LocalStack 3.8 com os mesmos 20 testes Tier 1-6. Resultados completos em [`findings-step-functions.md`](./findings-step-functions.md). Veredito: confirmou as hipóteses contra (lock-in profundo, custo) e adicionou achados sobre latência alta (p99=2092ms vs 22ms RabbitMQ); o atrativo "zero-ops" não compensa o pacote de desvantagens estruturais. Não muda a recomendação principal.
+**Status pós-PoC:** descartada inicialmente, **reaberta como 3ª PoC** (`saga-step-functions/`) após decisão preliminar pró-Temporal. Executada em LocalStack 3.8 com os mesmos 20 testes Tier 1-6. Resultados completos em [`findings-step-functions.md`](./findings-step-functions.md). Veredito: confirmou as hipóteses contra (lock-in profundo, custo) e adicionou achados sobre latência alta (p99=2092ms vs 22ms RabbitMQ); o atrativo "zero-ops" não compensa o pacote de desvantagens estruturais. Não muda a recomendação principal.
 
 ### 2.4 SQS puro
 
 Não substitui SAGA engine: sem state machine, sem compensação automática, sem replay. Continua sendo a opção certa para _job queue genérico_, não para _orquestração de SAGA_. Fora do PoC.
 
-## 3. Plano de PoC comparativo (EXECUTADO — concluído em 2026-04-29)
+## 3. Plano de PoC comparativo (executado)
 
 > **Status:** PoC concluída. 20 testes Tier 1-6 executados. Resultados em [`checklist-testes.md`](./checklist-testes.md) e [`fechamento.md`](./fechamento.md). Esta seção é mantida como **registro do plano original** que guiou a execução — os critérios de §3.2 foram congelados antes do PoC e seguidos rigorosamente para evitar viés ex-post.
 
@@ -143,27 +142,25 @@ Objetivo (original): gerar evidência concreta antes de fechar a recomendação.
 
 ### 3.1 Workflow de referência
 
-Implementar o **mesmo** workflow nas duas opções finalistas. Candidato natural: `ActivateStoreSaga` (caso do PR #2021 do backend), que já tem 5 passos atravessando `marketplace-api` ↔ `users-api` com compensação completa documentada em [`compreensao-saga.md`](./compreensao-saga.md) §3.3.
+Implementar o **mesmo** workflow nas duas opções finalistas. Foi adotada uma versão reduzida com 3 passos atravessando dois serviços fictícios:
 
-Se `ActivateStoreSaga` for grande demais para PoC, usar uma versão reduzida:
+1. `ReserveStock` — transação local com compensação `releaseStock`.
+2. `ChargeCredit` — chamada HTTP cross-service com compensação `refundCredit`.
+3. `ConfirmShipping` — passo final que pode falhar intencionalmente em alguns runs (`FORCE_FAIL=step3`) para exercitar reversão LIFO.
 
-1. Passo A em `marketplace-api` (transação local com compensação).
-2. Passo B em `users-api` (chamada HTTP com compensação).
-3. Passo C que falha intencionalmente em alguns runs para exercitar compensação.
+O importante: **mesmo escopo nas duas PoCs**, mesmos pontos de falha, mesmos requisitos de observabilidade.
 
-O importante: **mesmo escopo nos dois PoCs**, mesmos pontos de falha, mesmos requisitos de observabilidade.
+### 3.2 Critérios de decisão (registrados antes de implementar)
 
-### 3.2 Critérios de decisão (registrar antes de implementar)
-
-Pontuar cada ferramenta nos critérios abaixo. Pesos podem ser ajustados, mas **lista é congelada antes do PoC** para evitar que o resultado defina os critérios.
+Pontuar cada ferramenta nos critérios abaixo. Pesos podem ser ajustados, mas a **lista é congelada antes do PoC** para evitar que o resultado defina os critérios.
 
 | Critério                                   | Como medir                                                                               | Por que importa                                                     |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | **Esforço até happy path**                 | Horas reais até workflow completo rodando em ambiente local                              | Mede curva de aprendizado e DX inicial                              |
 | **Esforço de compensação completa**        | LOC + horas para cobrir todos os caminhos de falha                                       | Mede o ganho real de SAGA first-class vs construído                 |
-| **Observabilidade out-of-the-box**         | O que enxergamos sem investimento extra (saga em andamento, falhas, payloads)            | Diferencial frequentemente alegado do Temporal                      |
+| **Observabilidade out-of-the-box**         | O que se enxerga sem investimento extra (saga em andamento, falhas, payloads)            | Diferencial frequentemente alegado do Temporal                      |
 | **Esforço para observabilidade aceitável** | Horas para chegar ao mínimo aceitável (dashboard de sagas + alerta de compensação falha) | Custo real do RabbitMQ se o ganho do Temporal Web for significativo |
-| **DX em code review**                      | Reviewer consegue entender o fluxo sem rodar? Onde mora a lógica?                        | Crítico para padrão organizacional usado por 4 times                |
+| **DX em code review**                      | Reviewer consegue entender o fluxo sem rodar? Onde mora a lógica?                        | Crítico para padrão usado por múltiplos serviços                    |
 | **Resiliência simulada**                   | Matar worker mid-flight; simular deploy mid-flight; falha de compensação                 | Sem isso, durable execution é só promessa                           |
 | **Operação simulada**                      | Quanto da operação cai no time vs no engine/managed                                      | Mede overhead recorrente, não inicial                               |
 | **Custo projetado 12 meses**               | Cloud + infra + horas-engenheiro de manutenção                                           | Padronização tem custo, é preciso medir                             |
@@ -171,8 +168,8 @@ Pontuar cada ferramenta nos critérios abaixo. Pesos podem ser ajustados, mas **
 
 ### 3.3 Estrutura física do PoC
 
-- [`saga-rabbitmq/`](../saga-rabbitmq) — workflow de referência implementado com RabbitMQ + esboço de `mobilestock/laravel-saga`.
-- [`saga-temporal/`](../saga-temporal) — mesmo workflow implementado com `temporal/sdk` + RoadRunner workers + esboço de `mobilestock/laravel-temporal-saga`.
+- [`saga-rabbitmq/`](../saga-rabbitmq) — workflow de referência implementado com RabbitMQ + esboço de lib interna de saga.
+- [`saga-temporal/`](../saga-temporal) — mesmo workflow implementado com `temporal/sdk` + RoadRunner workers + esboço de wrapper interno.
 - Cada PoC tem README documentando: setup, como rodar, como simular falhas, métricas coletadas.
 
 ### 3.4 Cronograma proposto
@@ -193,80 +190,80 @@ Cronograma é estimativa; ajustar conforme escopo do workflow de referência e d
 
 ## 4. Critérios de qualidade que o padrão precisa garantir
 
-Independente de qual ferramenta vencer, qualquer SAGA na empresa precisa cumprir:
+Independente de qual ferramenta vencer, qualquer SAGA na arquitetura alvo precisa cumprir:
 
 1. **Idempotência por Activity** — qualquer engine pode reentregar; toda Activity recebe `idempotency_key` derivada de `saga_id + step_name`.
-2. **Estado persistido** — saga sobrevive a crashes/restarts (no engine ou no nosso DB, depende da ferramenta).
+2. **Estado persistido** — saga sobrevive a crashes/restarts (no engine ou no DB próprio, depende da ferramenta).
 3. **Compensação documentada** — explícita por step, sem "TODO: compensar depois".
 4. **Correlation ID** — `saga_id` propagado como header HTTP em todas as chamadas downstream.
 5. **Observabilidade default** — saga em andamento / compensada / falha órfã / compensação que falhou são todos visíveis sem investigação.
 6. **Timeout explícito** — em workflow inteiro e em cada step.
 7. **Alertas** — falha de compensação **sempre** vira alerta crítico (sistema fica realmente inconsistente, humano precisa ver).
 
-Esses critérios são input do PoC: ambas as ferramentas precisam mostrar como atendem (nativamente ou via código nosso).
+Esses critérios são input do PoC: ambas as ferramentas precisam mostrar como atendem (nativamente ou via código próprio).
 
 ## 5. Quando reavaliar premissas (mantido como referência histórica do plano pré-PoC)
 
 Se durante o PoC qualquer um destes mudar, parar e revisar antes de continuar:
 
-- **Migração EKS for acelerada** (todos os apps em poucos meses) → vantagem operacional do Temporal aumenta.
-- **Migração EKS for cancelada** ou marketplace-api voltar para Swarm → custo do Temporal sobe (workers fora do ambiente canônico).
+- **Migração de orquestrador for acelerada** (toda a frota em poucos meses) → vantagem operacional do Temporal aumenta.
+- **Migração for cancelada** ou substrato voltar para ambiente único → custo do Temporal sobe (workers fora do ambiente canônico).
 - **Volume estimado de SAGAs ficar muito baixo** (<100/dia agregadas) → talvez nenhum dos dois se justifique; SQS + lógica simples basta.
 - **Algum sistema crítico precisar de SAGA antes do PoC fechar** → decisão pontual com SQS + compensação manual; não antecipa o padrão.
 
-## 6. Pergunta-chave para validação com o tech lead
+## 6. Pergunta-chave para calibrar a recomendação
 
 A pergunta concreta cuja resposta calibra peso final do achado mais sério (T5.1 — silent corruption sob reordenamento):
 
-> **"Com que frequência você espera mudar a forma de uma saga (adicionar step, reordenar, mudar compensação) vs mudar regras de negócio dentro dos passos?"**
+> **"Com que frequência se espera mudar a forma de uma saga (adicionar step, reordenar, mudar compensação) vs mudar regras de negócio dentro dos passos?"**
 
-**Resposta do tech lead em 2026-04-30:**
+A resposta considerada pelo estudo aponta para "regra de negócio muda com muita frequência; convém minimizar responsabilidades do dev sobre tabela central de saga".
 
-> "A regra de negócio muda com muita frequência, e devemos deixar o mínimo de responsabilidades ao dev pra manusear um `saga_step` no banco."
+**Implicação:** a alternativa minoritária de §7.3 (RabbitMQ + lib interna com `saga_version`) fica enfraquecida sob orquestração — sua pré-condição era "time se compromete a manter `saga_version` + lint custom + code review centralizado SEM falhar", o oposto de "mínimo de responsabilidades sobre tabela central". Em Temporal, regra de negócio vive em **Activities (PHP comum)**, sem `Workflow::getVersion()` no dia-a-dia — o melhor caso para Temporal: paga zero custo de versionamento em deploys frequentes de regra. Detalhamento em [`fechamento.md`](./fechamento.md) §5.
 
-**Implicação:** a alternativa minoritária de §7.3 (RabbitMQ + lib `mobilestock/saga`) fica **descartada** — sua pré-condição era exatamente "time se compromete a manter `saga_version` + lint custom + code review centralizado SEM falhar", o oposto de "mínimo de responsabilidades ao dev". Em Temporal, regra de negócio vive em **Activities (PHP comum)**, sem `Workflow::getVersion()` no dia-a-dia — o melhor caso para Temporal: paga zero custo de versionamento em deploys frequentes de regra. Detalhamento em [`fechamento.md`](./fechamento.md) §5.
+A leitura mais ampla, no entanto, é que essa preferência também sinaliza interesse por **modelos sem state machine central** — o que reabre coreografia como caminho legítimo, não apenas Temporal como ferramenta. Daí o plano da 4ª PoC em §10.
 
-## 7. Recomendação fechada (2026-04-29)
+## 7. Recomendação consolidada da primeira iteração
 
-**Adotar Temporal como padrão organizacional para SAGA**, com as ressalvas técnicas abaixo.
+**Adotar Temporal como padrão para SAGA orquestrada**, com as ressalvas técnicas abaixo. Esta recomendação é válida para o ramo orquestrado do estudo; o ramo coreografado segue em avaliação.
 
 ### 7.1 Justificativa primária
 
 20 testes Tier 1-6 executados confirmaram empiricamente:
 
-1. **T5.1 (silent corruption sob reordenamento de steps) — achado mais grave:** RabbitMQ-PoC marca saga `COMPLETED` com state corrompido (estoque 2x, pagamento perdido) sob mudança comum (reordenar steps em deploy). Temporal panic LOUD com mensagem clara. Em 4 sistemas durante anos, esquecimento humano é certeza cumulativa.
-2. **T1.4 + T4.1 (durable execution):** Temporal sobreviveu a 30s de MariaDB caído + 10s de network outage; RabbitMQ-PoC: 3 workers caíram juntos com broker, sem reconexão automática.
+1. **T5.1 (silent corruption sob reordenamento de steps) — achado mais grave:** RabbitMQ-PoC marca saga `COMPLETED` com state corrompido (estoque 2x, pagamento perdido) sob mudança comum (reordenar steps em deploy). Temporal panic LOUD com mensagem clara. Em múltiplos serviços ao longo de anos, esquecimento humano é certeza cumulativa.
+2. **T1.4 + T4.1 (durable execution):** Temporal sobreviveu a 30s de Postgres caído + 10s de network outage; RabbitMQ-PoC: 3 workers caíram juntos com broker, sem reconexão automática.
 3. **T3.4 (postmortem rico):** Temporal entrega payloads de entrada e saída de cada step automaticamente; RabbitMQ-PoC só persiste `result` da lib — payloads de entrada são perdidos para sempre.
 4. **T4.4 (timeout vs error):** Temporal classifica 4 tipos distintos; RabbitMQ-PoC não tem conceito de timeout — handler travado bloqueia consumer.
 5. **T2.2 (cobertura automática de falhas):** Temporal classifica `Failed` para qualquer caminho de falha terminal; RabbitMQ-PoC exige código explícito por caminho (~3-5 dias eng + disciplina permanente).
 
-A natureza qualitativa desses critérios (correção, durabilidade, observabilidade) supera os quantitativos onde RabbitMQ ganha (latência p99 22ms vs 351ms; RAM idle 170 MB vs 439 MB; custo Cloud em escala $58k/ano).
+A natureza qualitativa desses critérios (correção, durabilidade, observabilidade) supera os quantitativos onde RabbitMQ ganha (latência p99 22ms vs 351ms; RAM idle 137 MiB vs 439 MB em 4.3; custo Cloud em escala $58k/ano).
 
 ### 7.2 Ressalvas técnicas
 
-- **Custo de adoção real existe:** ~1 semestre de calibração para o time interiorizar a dialética determinística (proibido `date()`, `rand()`, `PDO`, `Http::` em workflow code). Mitigação: pacote interno `mobilestock/laravel-temporal-saga` + lint PHPStan + treinamento + apps/_template_.
-- **Cloud só nos primeiros 6-12 meses.** Cálculo de TCO em [`fechamento.md`](./fechamento.md) §3.2 e [`consideracoes.md`](./consideracoes.md) §7: a partir de ~10M actions/mês (qualquer dos 4 sistemas após adotado), self-host EKS é financeiramente obrigatório.
+- **Custo de adoção real existe:** ~1 semestre de calibração para o time interiorizar a dialética determinística (proibido `date()`, `rand()`, `PDO`, `Http::` em workflow code). Mitigação: pacote interno (wrapper Laravel-Temporal) + lint PHPStan + treinamento + template canônico.
+- **Cloud só nos primeiros 6-12 meses.** Cálculo de TCO em [`fechamento.md`](./fechamento.md) §3.2 e [`consideracoes.md`](./consideracoes.md) §7: a partir de ~10M actions/mês (qualquer dos serviços envolvidos depois de adotado), self-host é financeiramente obrigatório.
 - **PECL grpc + RoadRunner pesam no setup local.** Aceitar como custo one-time per-dev (~25 min na primeira vez).
 - **Race condition na inicialização** (workers tentam conectar antes do server pronto): adicionar healthcheck gRPC + `depends_on` no compose canônico.
 - **SDK PHP é "segunda classe"** (Spiral Scout sob contrato com Temporal Inc): mitigar com pacote interno isolando apps do SDK; fork é viável (Apache 2.0).
 
-### 7.3 Alternativa minoritária — DESCARTADA em 2026-04-30
+### 7.3 Alternativa minoritária no ramo orquestrado
 
-A pré-condição era: "**a forma da saga muda raramente E o time se compromete a manter `saga_version` + lint custom + code review centralizado SEM falhar**". A resposta do tech lead em §6 explicita "mínimo de responsabilidades ao dev pra manusear um `saga_step` no banco" — diretamente conflita com manter `saga_version` na coluna e bumpar a cada mudança de forma.
+A pré-condição para que a alternativa "RabbitMQ + lib interna com versionamento manual" seja viável era: "**a forma da saga muda raramente E o time se compromete a manter `saga_version` + lint custom + code review centralizado SEM falhar**". A preferência sinalizada pelo estudo ("mínimo de responsabilidades ao dev pra manusear `saga_step` no banco") conflita diretamente com manter `saga_version` na coluna e bumpar a cada mudança de forma.
 
-Custo de RabbitMQ + lib seria ~17-23 dias eng inicial + manutenção recorrente + risco residual permanente. Caminho não retomado.
+Custo estimado de RabbitMQ + lib (orquestrado) seria ~17-23 dias eng inicial + manutenção recorrente + risco residual permanente. Caminho não retomado dentro do ramo orquestrado — mas o ramo **coreografado** é discussão separada (§10).
 
 ### 7.4 Casos pontuais
 
 Casos pontuais que **não justificam adotar plataforma nova** (1-2 fluxos isolados, sistema legado sem prazo de migração) podem usar **SQS + lógica simples + idempotência + alerta manual**. **Não tornar isso padrão.**
 
-### 7.5 Próximos passos
+### 7.5 Próximos passos (ramo orquestrado)
 
-1. **Validar com o tech lead** apresentando este documento + [`fechamento.md`](./fechamento.md) + reprodução de T5.1 ao vivo ou em vídeo curto.
-2. **Decidir Cloud vs self-host EKS** para os primeiros 6 meses (recomendação: começar Cloud para reduzir overhead inicial).
-3. **Construir `mobilestock/laravel-temporal-saga`** como pacote interno encapsulando RoadRunner + retry policies padrão + helpers de Saga + sanity checks de determinismo.
-4. **Treinar primeiros devs** com workshop de 1-2 dias + apps/_template_ canônico.
-5. **Migrar primeiro caso real** — `ActivateStoreSaga` no `marketplace-api` (PR #2021 do backend).
+1. **Validar o ramo orquestrado** apresentando este documento + [`fechamento.md`](./fechamento.md) + reprodução de T5.1 em vídeo curto.
+2. **Decidir Cloud vs self-host** para os primeiros 6 meses (recomendação: começar Cloud para reduzir overhead inicial).
+3. **Construir wrapper interno Laravel-Temporal** como pacote isolando RoadRunner + retry policies padrão + helpers de Saga + sanity checks de determinismo.
+4. **Treinar primeiros devs** com workshop de 1-2 dias + template canônico.
+5. **Migrar primeiro caso real.**
 6. **Estabelecer governance:** ADR + lint PHPStan (proíbe `date()`, `rand()`, `PDO`, `Http::` em workflow code) + code review centralizado nas primeiras 4-6 semanas.
 
 ## 8. Quando reavaliar a recomendação
@@ -274,29 +271,26 @@ Casos pontuais que **não justificam adotar plataforma nova** (1-2 fluxos isolad
 Se durante a adoção qualquer um destes mudar, parar e revisar antes de continuar:
 
 - **Volume real de sagas se confirmar muito baixo** (<1000/dia agregadas) → reconsiderar SQS + lógica simples.
-- ~~**Tech lead responder à pergunta de §6 com "raramente E o time mantém disciplina"**~~ → resolvido em 2026-04-30 (resposta foi o oposto, ver §6).
-- **Spiral Scout perder contrato com Temporal Inc** → re-avaliar SDK PHP (custo de fork ~viável).
+- **Spiral Scout perder contrato com Temporal Inc** → re-avaliar SDK PHP (custo de fork é viável).
 - **AWS lançar Step Functions com SDK PHP nativo + custo razoável** → reconsiderar.
-- **Migração EKS for cancelada** → reabrir avaliação (Temporal não suporta Swarm oficialmente).
+- **Migração entre substratos for cancelada** → reabrir avaliação (Temporal não suporta Swarm oficialmente).
 
 ## 9. Resumo de uma frase
 
-~~A recomendação está **fechada** após 20 testes Tier 1-6 contra PoCs reais: **adotar Temporal como padrão organizacional**.~~
-
-**Atualização 2026-04-30:** a recomendação foi **reaberta** após pré-review com o tech lead. A comparação cobriu apenas modelos orquestrados; falta uma 4ª PoC de saga coreografada (RabbitMQ pub/sub + lib mínima de compensação) para fechar a discovery. A recomendação final será uma **árvore de decisão** orquestração ⇄ coreografia, não uma escolha única de ferramenta. Detalhes no bloco de status no topo deste documento.
+A primeira iteração do estudo, sobre **modelos orquestrados**, recomenda **Temporal**. Uma segunda iteração trouxe coreografia para a comparação, e a recomendação final precisa ser uma **árvore de decisão** orquestração ⇄ coreografia, não uma escolha única de ferramenta. Detalhes na próxima seção.
 
 ---
 
 ## 10. Plano da 4ª PoC — saga coreografada (proposto)
 
-> Esta seção é proposta de trabalho, ainda não executada. Será detalhada em documento próprio antes do build (`saga-rabbitmq-coreografado/README.md`).
+> Esta seção é proposta de trabalho, ainda não totalmente executada. Será detalhada em documento próprio antes do build (`saga-rabbitmq-coreografado/README.md`).
 
 **Modelo a implementar:**
 
 - Mesmos 3 passos do workflow de referência (`ReserveStock` → `ChargeCredit` → `ConfirmShipping`).
 - Cada serviço publica eventos de domínio em tópico RabbitMQ (`stock.reserved`, `credit.charged`, `shipping.failed`).
 - Step seguinte é disparado por subscription no evento anterior — sem orquestrador.
-- Quando qualquer step publica `<step>.failed`, lib publica evento `saga.<id>.failed` num tópico fanout.
+- Quando qualquer step publica `<step>.failed`, a lib publica evento `saga.<id>.failed` num tópico fanout.
 - Cada serviço **ouve** `saga.<id>.failed` e roda sua compensação **se aplicável** (idempotente via dedup-key).
 - Sem tabela `saga_states`, sem `saga_definition`, sem `saga_version`.
 
@@ -306,14 +300,14 @@ Se durante a adoção qualquer um destes mudar, parar e revisar antes de continu
 
 | Teste original | Sobrevive? | Forma adaptada                                                                  |
 | -------------- | ---------- | ------------------------------------------------------------------------------- |
-| T1.1 versionamento | ❌ não se aplica | Não há saga_definition central                                              |
-| T1.4 falha de persistência | ✅ | RabbitMQ broker caído por 30s — eventos são reentregues?                       |
-| T2.2 cobertura de falhas | ⚠️ adaptado | Compensação **idempotente** sob retry: estoque devolvido 2x = bug ou ok?      |
-| T3.4 postmortem | ⚠️ adaptado | Sem timeline central — correlation-id + logs distribuídos resolvem?           |
-| T5.1 reordenar steps | ❌ não se aplica | Não há ordem central; cada serviço só conhece sua subscription                |
-| **Novo: ordering** | ➕ | Compensação chega antes do evento de sucesso — handler idempotente sobrevive?   |
-| **Novo: handler perdido** | ➕ | Serviço offline quando `saga.failed` é publicado — DLQ + replay funciona?     |
-| **Novo: loop** | ➕ | Handler de compensação falha sempre — sistema detecta e para?                  |
+| T1.1 versionamento | não se aplica | Não há saga_definition central                                              |
+| T1.4 falha de persistência | sim | RabbitMQ broker caído por 30s — eventos são reentregues?                       |
+| T2.2 cobertura de falhas | adaptado | Compensação **idempotente** sob retry: estoque devolvido 2x = bug ou ok?      |
+| T3.4 postmortem | adaptado | Sem timeline central — correlation-id + logs distribuídos resolvem?           |
+| T5.1 reordenar steps | não se aplica | Não há ordem central; cada serviço só conhece sua subscription                |
+| **Novo: ordering** | adicionado | Compensação chega antes do evento de sucesso — handler idempotente sobrevive?   |
+| **Novo: handler perdido** | adicionado | Serviço offline quando `saga.failed` é publicado — DLQ + replay funciona?     |
+| **Novo: loop** | adicionado | Handler de compensação falha sempre — sistema detecta e para?                  |
 
 **Critérios de comparação adicionados:**
 

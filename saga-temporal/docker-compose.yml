@@ -1,13 +1,16 @@
 services:
-  mariadb:
-    image: mariadb:11.4
+  # NOTA: Temporal NÃO suporta MariaDB (validado em 2026-05-04 — schema do auto-setup
+  # falha em CREATE INDEX com path JSON no driver mysql8 contra MariaDB 11.4).
+  # Banco oficial suportado: PostgreSQL, MySQL 8 ou Cassandra. A empresa usa MariaDB
+  # em produção, então adoção de Temporal exige um 2º SGBD dedicado ao engine.
+  # Ver findings-temporal.md §2.2.6 para análise do impacto na decisão.
+  postgresql:
+    image: postgres:16-alpine
     environment:
-      MARIADB_ROOT_PASSWORD: temporal
-      MARIADB_USER: temporal
-      MARIADB_PASSWORD: temporal
-      MARIADB_DATABASE: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_USER: temporal
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD", "pg_isready", "-U", "temporal"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -15,14 +18,14 @@ services:
   temporal:
     image: temporalio/auto-setup:1.26
     depends_on:
-      mariadb:
+      postgresql:
         condition: service_healthy
     environment:
-      DB: mysql8
-      DB_PORT: 3306
-      MYSQL_USER: temporal
-      MYSQL_PWD: temporal
-      MYSQL_SEEDS: mariadb
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: postgresql
     ports:
       - "7233:7233"
     healthcheck:

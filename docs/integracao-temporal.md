@@ -1,28 +1,28 @@
 # Integração Laravel ↔ Temporal — passo a passo
 
-Como adotar Temporal como padrão organizacional partindo da stack atual (Laravel + Docker Swarm) e do exemplo concreto: `StoreController@activate` no `marketplace-api` (PR #2021).
+Como adotar Temporal como padrão organizacional partindo de uma stack Laravel + Docker Swarm. O exemplo concreto usado ao longo deste guia é um fluxo de criação de pedido com reserva de estoque + cobrança + confirmação, implementado como `ActivateStoreSaga`.
 
 Premissas em vigor:
 
-- Apenas `marketplace-api` migra para EKS inicialmente; demais ficam em Swarm por tempo indeterminado (ver `project_infra_eks_gradual.md`).
-- Workers Temporal rodam no EKS; Activities chamam APIs Laravel/Swarm via HTTPS pública.
-- Alvo de produção: Temporal Cloud nos primeiros 6-12 meses, depois self-host EKS (gatilho de custo).
+- Apenas o serviço Laravel principal (`order-service`) migra para Kubernetes inicialmente; demais serviços ficam em Swarm por tempo indeterminado, configurando uma stack híbrida Docker Swarm + Kubernetes.
+- Workers Temporal rodam no cluster Kubernetes; Activities chamam APIs Laravel/Swarm via HTTPS pública.
+- Alvo de produção: Temporal Cloud nos primeiros 6-12 meses, depois self-host em Kubernetes (gatilho de custo).
 
 ---
 
 ## Fase 0 — Pré-requisitos (1-2 dias)
 
-Decisões de plataforma que precisam estar resolvidas antes de qualquer commit no `marketplace-api`:
+Decisões de plataforma que precisam estar resolvidas antes de qualquer commit no `order-service`:
 
-1. **Conta Temporal Cloud provisionada** (ou cluster self-hosted no EKS) com:
+1. **Conta Temporal Cloud provisionada** (ou cluster self-hosted em Kubernetes) com:
 
-   - Namespace `mobilestock-prod` e `mobilestock-staging`.
+   - Namespaces `app-prod` e `app-staging`.
    - mTLS cert/key emitidos (Cloud) ou cluster CA exportada (self-host).
    - Retenção de history: 30 dias para prod, 7 dias para staging.
 
-2. **DNS interno + egress liberado** do EKS para `*.tmprl.cloud:7233` (gRPC). Se self-host: ALB privado + Service ClusterIP.
+2. **DNS interno + egress liberado** do cluster Kubernetes para `*.tmprl.cloud:7233` (gRPC). Se self-host: ALB privado + Service ClusterIP.
 
-3. **Pacote interno `mobilestock/laravel-temporal-saga`** criado como repo separado (Packagist privado ou Satis). Esqueleto:
+3. **Pacote interno `acme/laravel-temporal-saga`** criado como repo separado (Packagist privado ou Satis). Esqueleto:
    ```
    laravel-temporal-saga/
    ├── composer.json
@@ -40,28 +40,27 @@ Decisões de plataforma que precisam estar resolvidas antes de qualquer commit n
 
 ## Fase 1 — Infra do Temporal local (Compose para dev) (1 dia)
 
-Antes de mexer no `marketplace-api`, replicar o `saga-temporal/docker-compose.yml` deste PoC no ambiente de dev local. Adicionar ao `docker-compose.override.yml` do `marketplace-api`:
+Antes de mexer no `order-service`, replicar o `saga-temporal/docker-compose.yml` deste PoC no ambiente de dev local. Adicionar ao `docker-compose.override.yml` do `order-service`:
+
+> ⚠️ **Achado decisivo:** Temporal **NÃO suporta MariaDB**. Tentativa com `mariadb:11.4` + driver `mysql8` falhou em migration de schema do auto-setup (CREATE INDEX com path JSON usa sintaxe MySQL 8 incompatível). Como esta aplicação Laravel usa MariaDB em produção, **adoção de Temporal exige um 2º SGBD dedicado** ao engine — o banco do `order-service` continua MariaDB; o do Temporal precisa ser PostgreSQL ou MySQL 8. Esse custo operacional (DBA, backup, monitoring de outro engine) está registrado em `findings-temporal.md` §2.2.6 e é **fortemente negativo para a adoção de Temporal**.
 
 ```yaml
 services:
-  mariadb-temporal:
-    image: mariadb:11.4
+  postgresql-temporal:
+    image: postgres:16-alpine
     environment:
-      MARIADB_ROOT_PASSWORD: temporal
-      MARIADB_USER: temporal
-      MARIADB_PASSWORD: temporal
-      MARIADB_DATABASE: temporal
-    volumes: ["temporal-mariadb:/var/lib/mysql"]
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_USER: temporal
+    volumes: ["temporal-pg:/var/lib/postgresql/data"]
 
   temporal:
     image: temporalio/auto-setup:1.26
-    depends_on: [mariadb-temporal]
+    depends_on: [postgresql-temporal]
     environment:
-      DB: mysql8
-      DB_PORT: 3306
-      MYSQL_SEEDS: mariadb-temporal
-      MYSQL_USER: temporal
-      MYSQL_PWD: temporal
+      DB: postgres12
+      POSTGRES_SEEDS: postgresql-temporal
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
     ports: ["7233:7233"]
     healthcheck:
       test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
@@ -77,7 +76,7 @@ services:
     ports: ["8088:8080"]
 
 volumes:
-  temporal-mariadb:
+  temporal-pg:
 ```
 
 > **Importante**: o healthcheck no service `temporal` é necessário porque a imagem `temporalio/auto-setup` leva ~10-15s para inicializar (cria namespace `default`, sobe os 4 serviços internos). Sem ele, workers que usam `depends_on: temporal` partem antes do gRPC estar respondendo e morrem com `connection refused`. Os services de worker (Fase 3) devem usar `depends_on: temporal: condition: service_healthy` — bug encontrado durante o PoC e documentado em `findings-temporal.md` §1.3.
@@ -88,11 +87,11 @@ Validação: `docker compose up temporal` + `tctl --address localhost:7233 names
 
 ## Fase 2 — Imagem Docker da aplicação (PHP + grpc + RoadRunner) (2-3 dias)
 
-A imagem atual do `marketplace-api` (php-fpm) não consegue rodar workers Temporal — falta extensão `grpc` e o worker precisa ser long-running com loop próprio (RoadRunner).
+A imagem atual do `order-service` (php-fpm) não consegue rodar workers Temporal — falta extensão `grpc` e o worker precisa ser long-running com loop próprio (RoadRunner).
 
 **Estratégia**: duas imagens, mesmo Dockerfile multi-stage.
 
-`marketplace-api/Dockerfile`:
+`order-service/Dockerfile`:
 
 ```dockerfile
 # === Stage base: extensões PHP comuns aos dois alvos ===
@@ -137,15 +136,15 @@ temporal:
   activities: { num_workers: 4 }
 ```
 
-CI publica duas tags: `marketplace-api:1.x.y-api` e `marketplace-api:1.x.y-worker`.
+CI publica duas tags: `order-service:1.x.y-api` e `order-service:1.x.y-worker`.
 
 ---
 
-## Fase 3 — Pacote interno: instalação no `marketplace-api` (1 dia)
+## Fase 3 — Pacote interno: instalação no `order-service` (1 dia)
 
 ```bash
-cd marketplace-api
-composer require mobilestock/laravel-temporal-saga:^1.0 temporal/sdk:^2.17 spiral/roadrunner-cli:^2.5
+cd order-service
+composer require acme/laravel-temporal-saga:^1.0 temporal/sdk:^2.17 spiral/roadrunner-cli:^2.5
 php artisan vendor:publish --tag=temporal-config
 ```
 
@@ -154,15 +153,15 @@ php artisan vendor:publish --tag=temporal-config
 ```php
 return [
     'address' => env('TEMPORAL_ADDRESS', 'temporal:7233'),
-    'namespace' => env('TEMPORAL_NAMESPACE', 'mobilestock-prod'),
+    'namespace' => env('TEMPORAL_NAMESPACE', 'app-prod'),
     'tls' => [
         'cert' => env('TEMPORAL_TLS_CERT'),
         'key'  => env('TEMPORAL_TLS_KEY'),
     ],
     'task_queues' => [
-        'marketplace-saga' => [
+        'order-saga' => [
             'workflows'  => [\App\Sagas\ActivateStoreSaga::class],
-            'activities' => [\App\Sagas\Activities\MarketplaceActivities::class],
+            'activities' => [\App\Sagas\Activities\OrderActivities::class],
         ],
     ],
 ];
@@ -172,24 +171,24 @@ return [
 
 ```ini
 TEMPORAL_ADDRESS=temporal:7233
-TEMPORAL_NAMESPACE=mobilestock-prod
+TEMPORAL_NAMESPACE=app-prod
 TEMPORAL_TLS_CERT=/secrets/temporal-client.crt
 TEMPORAL_TLS_KEY=/secrets/temporal-client.key
 ```
 
 ---
 
-## Fase 4 — Refatorar `StoreController@activate` (2-3 dias)
+## Fase 4 — Refatorar o endpoint de criação de pedido (2-3 dias)
 
-### 4.1 Antes (síncrono — código atual do PR #2021 simplificado)
+### 4.1 Antes (síncrono — código original simplificado)
 
 ```php
-// app/Http/Controllers/StoreController.php
+// app/Http/Controllers/OrderController.php
 public function activate(int $storeId, Request $request)
 {
     DB::transaction(function () use ($storeId) {
         $reservation = $this->reserveStock($storeId);
-        $charge = $this->usersApi->chargeCredit($storeId);
+        $charge = $this->paymentApi->chargeCredit($storeId);
         $shipping = $this->shippingApi->confirm($storeId);
         Store::find($storeId)->update(['status' => 'active']);
     });
@@ -202,7 +201,7 @@ Problemas: timeout do request; rollback de DB não desfaz `chargeCredit` se `con
 ### 4.2 Depois (controller dispara workflow, retorna 202)
 
 ```php
-// app/Http/Controllers/StoreController.php
+// app/Http/Controllers/OrderController.php
 use Temporal\Client\WorkflowClient;
 use Temporal\Client\WorkflowOptions;
 use App\Sagas\ActivateStoreSagaInterface;
@@ -214,7 +213,7 @@ public function activate(int $storeId, WorkflowClient $client)
         ActivateStoreSagaInterface::class,
         WorkflowOptions::new()
             ->withWorkflowId("activate-store-{$storeId}")    // dedupe: 2 cliques = 1 saga
-            ->withTaskQueue('marketplace-saga')
+            ->withTaskQueue('order-saga')
             ->withWorkflowExecutionTimeout(CarbonInterval::minutes(15))
     );
 
@@ -260,9 +259,9 @@ interface ActivateStoreSagaInterface
 // app/Sagas/ActivateStoreSaga.php
 namespace App\Sagas;
 
-use App\Sagas\Activities\MarketplaceActivitiesInterface;
-use App\Sagas\Activities\UsersActivitiesInterface;
-use Mobilestock\TemporalSaga\Saga;
+use App\Sagas\Activities\OrderActivitiesInterface;
+use App\Sagas\Activities\PaymentActivitiesInterface;
+use Acme\TemporalSaga\Saga;
 use Temporal\Activity\ActivityOptions;
 use Temporal\Common\RetryOptions;
 use Temporal\Workflow;
@@ -270,8 +269,8 @@ use Carbon\CarbonInterval;
 
 class ActivateStoreSaga implements ActivateStoreSagaInterface
 {
-    private MarketplaceActivitiesInterface $marketplace;
-    private UsersActivitiesInterface $users;
+    private OrderActivitiesInterface $order;
+    private PaymentActivitiesInterface $payment;
 
     public function __construct()
     {
@@ -284,11 +283,11 @@ class ActivateStoreSaga implements ActivateStoreSagaInterface
                     ->withBackoffCoefficient(2.0)
             );
 
-        $this->marketplace = Workflow::newActivityStub(
-            MarketplaceActivitiesInterface::class, $opts
+        $this->order = Workflow::newActivityStub(
+            OrderActivitiesInterface::class, $opts
         );
-        $this->users = Workflow::newActivityStub(
-            UsersActivitiesInterface::class, $opts
+        $this->payment = Workflow::newActivityStub(
+            PaymentActivitiesInterface::class, $opts
         );
     }
 
@@ -296,17 +295,17 @@ class ActivateStoreSaga implements ActivateStoreSagaInterface
     {
         $saga = new Saga();
         try {
-            $reservation = yield $this->marketplace->reserveStock($storeId);
+            $reservation = yield $this->order->reserveStock($storeId);
             $saga->addCompensation(fn() =>
-                yield $this->marketplace->releaseStock($reservation['id'])
+                yield $this->order->releaseStock($reservation['id'])
             );
 
-            $charge = yield $this->users->chargeCredit($storeId);
+            $charge = yield $this->payment->chargeCredit($storeId);
             $saga->addCompensation(fn() =>
-                yield $this->users->refundCredit($charge['id'])
+                yield $this->payment->refundCredit($charge['id'])
             );
 
-            yield $this->marketplace->confirmShipping($storeId);
+            yield $this->order->confirmShipping($storeId);
 
             return ['status' => 'completed', 'storeId' => $storeId];
         } catch (\Throwable $e) {
@@ -320,13 +319,13 @@ class ActivateStoreSaga implements ActivateStoreSagaInterface
 ### 4.4 Activities (Eloquent comum, sem restrições)
 
 ```php
-// app/Sagas/Activities/MarketplaceActivitiesInterface.php
+// app/Sagas/Activities/OrderActivitiesInterface.php
 namespace App\Sagas\Activities;
 
 use Temporal\Activity\ActivityInterface;
 
-#[ActivityInterface(prefix: "Marketplace.")]
-interface MarketplaceActivitiesInterface
+#[ActivityInterface(prefix: "Order.")]
+interface OrderActivitiesInterface
 {
     public function reserveStock(int $storeId): array;
     public function releaseStock(int $reservationId): void;
@@ -335,13 +334,13 @@ interface MarketplaceActivitiesInterface
 ```
 
 ```php
-// app/Sagas/Activities/MarketplaceActivities.php
+// app/Sagas/Activities/OrderActivities.php
 namespace App\Sagas\Activities;
 
 use App\Models\StockReservation;
 use Illuminate\Support\Facades\DB;
 
-class MarketplaceActivities implements MarketplaceActivitiesInterface
+class OrderActivities implements OrderActivitiesInterface
 {
     public function reserveStock(int $storeId): array
     {
@@ -393,36 +392,36 @@ class RunSagaWorker extends Command
 }
 ```
 
-Local (dev): `php artisan saga:worker marketplace-saga` em terminal separado.
+Local (dev): `php artisan saga:worker order-saga` em terminal separado.
 
 ---
 
-## Fase 6 — Manifestos EKS (worker) (2-3 dias)
+## Fase 6 — Manifestos Kubernetes (worker) (2-3 dias)
 
-`k8s/marketplace-api/worker-deployment.yaml`:
+`k8s/order-service/worker-deployment.yaml`:
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: marketplace-saga-worker
-  namespace: marketplace
+  name: order-saga-worker
+  namespace: order
 spec:
   replicas: 3
-  selector: { matchLabels: { app: marketplace-saga-worker } }
+  selector: { matchLabels: { app: order-saga-worker } }
   template:
     metadata:
-      labels: { app: marketplace-saga-worker }
+      labels: { app: order-saga-worker }
     spec:
       containers:
         - name: worker
-          image: registry.mobilestock.io/marketplace-api:1.x.y-worker
-          command: ["php", "artisan", "saga:worker", "marketplace-saga"]
+          image: registry.example.com/order-service:1.x.y-worker
+          command: ["php", "artisan", "saga:worker", "order-saga"]
           env:
-            - { name: TEMPORAL_ADDRESS, value: "mobilestock.tmprl.cloud:7233" }
-            - { name: TEMPORAL_NAMESPACE, value: "mobilestock-prod" }
+            - { name: TEMPORAL_ADDRESS, value: "app.tmprl.cloud:7233" }
+            - { name: TEMPORAL_NAMESPACE, value: "app-prod" }
             - name: DB_HOST
-              valueFrom: { secretKeyRef: { name: marketplace-db, key: host } }
+              valueFrom: { secretKeyRef: { name: order-db, key: host } }
           volumeMounts:
             - { name: temporal-tls, mountPath: /secrets, readOnly: true }
           resources:
@@ -446,36 +445,36 @@ API container continua igual (php-fpm), só ganha env vars Temporal:
 
 ```yaml
 env:
-  - { name: TEMPORAL_ADDRESS, value: "mobilestock.tmprl.cloud:7233" }
-  - { name: TEMPORAL_NAMESPACE, value: "mobilestock-prod" }
+  - { name: TEMPORAL_ADDRESS, value: "app.tmprl.cloud:7233" }
+  - { name: TEMPORAL_NAMESPACE, value: "app-prod" }
 ```
 
 ---
 
-## Fase 7 — Cross-service (chamadas pra users-api, shipping-api) (decisão arquitetural)
+## Fase 7 — Cross-service (chamadas pra `payment-service`, shipping-api) (decisão arquitetural)
 
-Duas opções pro `chargeCredit` que vive em `users-api`:
+Duas opções pro `chargeCredit` que vive no `payment-service`:
 
 ### Opção A — HTTP Activity (recomendado pra começar)
 
-Activity no `marketplace-api` chama users-api via Guzzle, como hoje. Temporal cuida de retry/timeout. Zero mudança em users-api.
+Activity no `order-service` chama o `payment-service` via Guzzle, como hoje. Temporal cuida de retry/timeout. Zero mudança no `payment-service`.
 
 ```php
 public function chargeCredit(int $storeId): array
 {
-    return Http::withToken(config('users.token'))
+    return Http::withToken(config('payment.token'))
         ->timeout(10)
-        ->post(config('users.url') . '/credits/charge', ['store_id' => $storeId])
+        ->post(config('payment.url') . '/credits/charge', ['store_id' => $storeId])
         ->throw()
         ->json();
 }
 ```
 
-### Opção B — Worker dedicado em users-api (depois)
+### Opção B — Worker dedicado em `payment-service` (depois)
 
-users-api ganha seu próprio worker registrando `UsersActivities` na task queue `users-saga`. Workflow no marketplace usa `Workflow::newActivityStub()` apontando pra essa queue.
+`payment-service` ganha seu próprio worker registrando `PaymentActivities` na task queue `payment-saga`. Workflow no `order-service` usa `Workflow::newActivityStub()` apontando pra essa queue.
 
-Vantagens: retry granular por serviço; falha em users-api não consome retry do orquestrador; observabilidade separada.
+Vantagens: retry granular por serviço; falha em `payment-service` não consome retry do orquestrador; observabilidade separada.
 
 Custo: replicar Fases 2-6 em cada repo Laravel que vira "owner" de activities.
 
@@ -534,9 +533,9 @@ CI roda `vendor/bin/phpstan analyse app/Sagas` em PR; bloqueia merge.
 | 1. Compose local                              | 1 dia                              | Backend          |
 | 2. Dockerfile multi-stage + RoadRunner        | 2-3 dias                           | Backend + DevOps |
 | 3. Pacote interno (instalação básica)         | 1 dia                              | Backend          |
-| 4. Refator `activate` + Workflow + Activities | 2-3 dias                           | Backend          |
+| 4. Refator do endpoint + Workflow + Activities| 2-3 dias                           | Backend          |
 | 5. Artisan command worker                     | 1 dia                              | Backend          |
-| 6. Manifestos EKS                             | 2-3 dias                           | DevOps           |
+| 6. Manifestos Kubernetes                      | 2-3 dias                           | DevOps           |
 | 7. Cross-service (decisão A/B)                | 1 dia decisão + N dias por serviço | Time + Backend   |
 | 8. Observabilidade                            | 3-5 dias                           | Backend + SRE    |
 | 9. Lint PHPStan                               | 3-5 dias                           | Backend          |
@@ -549,10 +548,10 @@ Confere com o número da `recomendacao-saga.md` §6 (custo de adoção ~1 semest
 ## Checklist mínimo pra dar `git push` da PR de adoção
 
 - [ ] Imagem worker buildada e publicada em registry.
-- [ ] Namespace Temporal (Cloud ou self-host) acessível do EKS.
-- [ ] mTLS cert montado como Secret no EKS.
-- [ ] `php artisan saga:worker marketplace-saga` rodando ≥2 replicas.
-- [ ] `StoreController@activate` retorna 202 com `saga_id`.
+- [ ] Namespace Temporal (Cloud ou self-host) acessível do cluster Kubernetes.
+- [ ] mTLS cert montado como Secret no Kubernetes.
+- [ ] `php artisan saga:worker order-saga` rodando ≥2 replicas.
+- [ ] Endpoint de criação de pedido retorna 202 com `saga_id`.
 - [ ] `GET /sagas/{id}` retorna status correto.
 - [ ] Teste E2E: happy path + FORCE_FAIL=step3 verifica compensação completa.
 - [ ] PHPStan custom rules ativas no CI.

@@ -2,7 +2,7 @@
 
 > Documento simétrico a [`findings-rabbitmq.md`](./findings-rabbitmq.md) e [`findings-temporal.md`](./findings-temporal.md). Cobre os 20 testes Tier 1-6 executados contra a PoC `saga-step-functions/` rodando em LocalStack 3.8 + activity workers PHP poll-based.
 >
-> **Atenção a uma limitação importante de ambiente:** os testes rodaram em **LocalStack** (emulador local) e não em AWS real. Algumas observações são consequência direta dessa escolha (ver §11 — limitações conhecidas).
+> **Atenção a uma limitação importante de ambiente:** os testes rodaram em **LocalStack** (emulador local) e não em AWS real. Algumas observações são consequência direta dessa escolha (ver Seção 11 — limitações conhecidas).
 
 ---
 
@@ -34,8 +34,8 @@
 | Implementação de compensação LIFO        | **Catch chain em ASL**: cada step tem `Catch` apontando para o próximo passo da cadeia de reversão. ConfirmShipping fail → RefundCredit → ReleaseStock → Compensated. |
 | LOC dedicadas a compensação no ASL       | ~25 (Catch blocks + states de compensação)                                                                                                                            |
 | LOC de handlers de compensação (workers) | 12 (releaseStock + refundCredit)                                                                                                                                      |
-| Padrão LIFO                              | ✅ via Catch chain manual                                                                                                                                             |
-| Compensação paralela                     | ❌ não nativo; teria que usar `Type: Parallel` state — refator significativo do ASL                                                                                   |
+| Padrão LIFO                              | via Catch chain manual                                                                                                                                                |
+| Compensação paralela                     | não nativo; teria que usar `Type: Parallel` state — refator significativo do ASL                                                                                      |
 
 Compensação **funcionou** ponta a ponta:
 
@@ -66,7 +66,7 @@ Compensação **funcionou** ponta a ponta:
 
 ### Conclusão
 
-Step Functions entrega observabilidade rica em AWS real (próxima do Temporal Web UI em capacidade), mas em LocalStack (que é onde rodamos o PoC) a UI gráfica não está disponível. Para postmortem honesto, precisamos confiar em `getExecutionHistory` via API.
+Step Functions entrega observabilidade rica em AWS real (próxima do Temporal Web UI em capacidade), mas em LocalStack (que é onde a PoC rodou) a UI gráfica não está disponível. Para postmortem honesto, é necessário confiar em `getExecutionHistory` via API.
 
 ---
 
@@ -74,11 +74,11 @@ Step Functions entrega observabilidade rica em AWS real (próxima do Temporal We
 
 | Componente        | Esforço estimado                                    | Comparação                          |
 | ----------------- | --------------------------------------------------- | ----------------------------------- |
-| Métricas básicas  | ✅ grátis (CloudWatch)                              | RabbitMQ: 4-6h                      |
-| Timeline visual   | ✅ grátis (Step Functions Console em AWS real)      | RabbitMQ: 1 dia                     |
-| Replay/postmortem | ⚠️ via getExecutionHistory + reproduzir manualmente | Temporal: grátis                    |
+| Métricas básicas  | grátis (CloudWatch)                                 | RabbitMQ: 4-6h                      |
+| Timeline visual   | grátis (Step Functions Console em AWS real)        | RabbitMQ: 1 dia                     |
+| Replay/postmortem | via getExecutionHistory + reproduzir manualmente    | Temporal: grátis                    |
 | Alerta de falha   | ~15 lines YAML CloudWatch Alarm + SNS               | similar a Temporal                  |
-| Search/filter     | ✅ via `listExecutions` filters                     | similar a Temporal                  |
+| Search/filter     | via `listExecutions` filters                        | similar a Temporal                  |
 | **Total**         | **~0.5 dia** (em AWS real)                          | RabbitMQ ~3-5 dias; Temporal ~1 dia |
 
 Custo de observabilidade no Step Functions é baixo, mas amarrado ao stack AWS.
@@ -114,11 +114,11 @@ Custo de observabilidade no Step Functions é baixo, mas amarrado ao stack AWS.
 
 **Setup:** SLOW_RESERVE_STOCK=12, fire saga, kill worker durante sleep, restart.
 
-**Resultado:** ✅ saga completou — ActivityTimedOut depois de 60s + reagendamento + worker novo pega no retry. Mais devagar que Temporal/RabbitMQ por causa do timeout fixo de 60s, mas funciona.
+**Resultado:** saga completou — ActivityTimedOut depois de 60s + reagendamento + worker novo pega no retry. Mais devagar que Temporal/RabbitMQ por causa do timeout fixo de 60s, mas funciona.
 
 ### 6.2 Cenário B: kill activity workers e retomar
 
-Mesmo padrão de Temporal — workers stateless, podem morrer e voltar; tasks ficam pendentes no engine, retomam quando worker volta. ✅
+Mesmo padrão de Temporal — workers stateless, podem morrer e voltar; tasks ficam pendentes no engine, retomam quando worker volta.
 
 ### 6.3 Cenário C: at-least-once / execução dupla
 
@@ -128,7 +128,7 @@ Mesmo padrão de Temporal — workers stateless, podem morrer e voltar; tasks fi
 
 **Setup:** SLOW=20, fire saga, `docker stop localstack` aos 4s, esperar 30s, restart.
 
-**Resultado:** ❌ **TODO O STATE FOI PERDIDO.**
+**Resultado:** **TODO O STATE FOI PERDIDO.**
 
 - Saga `dd095714` retornou `ExecutionDoesNotExist`.
 - State machine retornou `0` em `listStateMachines`.
@@ -143,7 +143,7 @@ Mesmo padrão de Temporal — workers stateless, podem morrer e voltar; tasks fi
 
 - Temporal (T1.4): sobreviveu a 30s de MariaDB parado, retomou normalmente.
 - RabbitMQ (T1.4): workers caíram com broker; após restart manual, mensagens em queue durable foram processadas.
-- Step Functions/LocalStack: perda total de state — **arquitetonicamente possível recuperar em AWS real, mas no nosso ambiente local impossível**.
+- Step Functions/LocalStack: perda total de state — **arquitetonicamente possível recuperar em AWS real, mas no ambiente local impossível**.
 
 ---
 
@@ -163,10 +163,10 @@ Em AWS real, operação é zero — nem cluster nem nodes para gerenciar. **Esse
 
 ## 8. Custo projetado 12 meses
 
-Step Functions é **always-managed**, pay-per-use. Cálculo para volume agregado dos 4 sistemas (~17M sagas/mês × ~10 transições por saga = ~170M transições/mês):
+Step Functions é **always-managed**, pay-per-use. Cálculo para volume agregado considerando múltiplos serviços (~17M sagas/mês × ~10 transições por saga = ~170M transições/mês):
 
 - **Standard mode:** $0.025 por 1.000 transições. Total: 170M × $0.025/1000 = **$4250/mês ≈ $51k/ano**.
-- **Express mode:** $0.000001/request + $0.000002/GB-segundo. Mais barato em volume mas SEM history persistente — não serve para nosso caso (precisamos postmortem).
+- **Express mode:** $0.000001/request + $0.000002/GB-segundo. Mais barato em volume mas SEM history persistente — não serve para casos que exigem postmortem.
 
 Comparação:
 
@@ -203,15 +203,15 @@ Comparação:
 | Throughput burst (100 sagas)                | 48/s                  | 28/s                                       | **10.9/s**                                            | **RabbitMQ**                           |
 | Throughput sustentado                       | 9.7/s                 | 9.5/s                                      | **7.5/s**                                             | RabbitMQ/Temporal                      |
 | Latência fim-a-fim p99                      | **22ms**              | 351ms                                      | **2092ms**                                            | **RabbitMQ**                           |
-| Resiliência a infra failure                 | ⚠️ workers caem       | ✅ retoma                                  | ❌ LocalStack perdeu state                            | **Temporal**                           |
-| Compensação paralela                        | ⚠️ por arquitetura    | ✅ 1 LOC switch                            | ❌ exige rewrite ASL para Parallel state              | **Temporal**                           |
-| Observabilidade default                     | ❌ logs               | ✅ Temporal Web UI                         | ✅ Step Functions Console (AWS real)                  | **Temporal / Step Functions**          |
-| Postmortem                                  | ⚠️ 2-15 min           | ✅ 30s-1min                                | ✅ via API/Console                                    | **Temporal / Step Functions**          |
-| Versionamento — sagas em voo                | ❌ silent corruption  | ✅ panic LOUD                              | ⚠️ silent migration (LocalStack) / pinning (AWS real) | **Temporal**                           |
-| Lock-in                                     | ✅ AMQP padrão        | ⚠️ moderado                                | ❌ profundo (AWS)                                     | **RabbitMQ**                           |
+| Resiliência a infra failure                 | workers caem          | retoma                                     | LocalStack perdeu state                               | **Temporal**                           |
+| Compensação paralela                        | por arquitetura       | 1 LOC switch                               | exige rewrite ASL para Parallel state                 | **Temporal**                           |
+| Observabilidade default                     | logs                  | Temporal Web UI                            | Step Functions Console (AWS real)                     | **Temporal / Step Functions**          |
+| Postmortem                                  | 2-15 min              | 30s-1min                                   | via API/Console                                       | **Temporal / Step Functions**          |
+| Versionamento — sagas em voo                | silent corruption     | panic LOUD                                 | silent migration (LocalStack) / pinning (AWS real)    | **Temporal**                           |
+| Lock-in                                     | AMQP padrão           | moderado                                   | profundo (AWS)                                        | **RabbitMQ**                           |
 | Custo financeiro 12 meses (volume agregado) | ~$3k + 17-23 dias eng | ~$58k Cloud / ~$5k self-host + 15 dias eng | ~$51k                                                 | **RabbitMQ / Temporal self-host**      |
-| Operação                                    | ⚠️ clustering         | ⚠️ cluster ou Cloud                        | ✅✅ zero ops (managed)                               | **Step Functions**                     |
-| Bus factor                                  | ❌ lib interna        | ✅ SDK público                             | ✅✅ AWS oficial                                      | **Step Functions**                     |
+| Operação                                    | clustering            | cluster ou Cloud                           | zero ops (managed)                                    | **Step Functions**                     |
+| Bus factor                                  | lib interna           | SDK público                                | AWS oficial                                           | **Step Functions**                     |
 
 **Score qualitativo:**
 
@@ -219,7 +219,7 @@ Comparação:
 - **RabbitMQ vence em latência, throughput e custo.**
 - **Step Functions vence em operação zero, bus factor, e lock-in da plataforma (AWS oficial).**
 
-**Step Functions não vence Temporal em nenhum dos critérios qualitativos críticos** que motivaram a recomendação atual (silent corruption, durable execution, postmortem). Adiciona zero-ops como diferencial — mas com custo de lock-in profundo + latência alta.
+**Step Functions não vence Temporal em nenhum dos critérios qualitativos críticos** que motivaram a recomendação atual deste estudo (silent corruption, durable execution, postmortem). Adiciona zero-ops como diferencial — mas com custo de lock-in profundo + latência alta.
 
 ---
 
@@ -227,7 +227,7 @@ Comparação:
 
 Os testes rodaram em **LocalStack 3.8 free**, não em AWS real. Implica:
 
-1. **Sem persistência:** restart de LocalStack perde state. Não testamos durable execution real.
+1. **Sem persistência:** restart de LocalStack perde state. Durable execution real não foi testada.
 2. **Sem revision pinning:** T1.1 mostrou silent migration de in-flight executions para nova ASL — comportamento documentado de **AWS real é o oposto** (Standard executions são pinned ao revision do start).
 3. **Latência inflada:** p99 de 2s no LocalStack provavelmente cai para ~500ms-1s em AWS real (sem REST roundtrip overhead).
 4. **Sem Console UI:** Step Functions Console gráfico não está disponível no free tier.
@@ -243,10 +243,10 @@ Com os critérios já medidos:
 
 - **Step Functions resolve operação** (zero ops em AWS real).
 - **Step Functions não resolve correção sob mudança de código** (silent migration na nossa observação; em AWS real é pinning, mas isso transfere o problema: sagas pinned em revisão antiga não recebem fixes de bugs até completarem — pior do que `getVersion()` granular do Temporal).
-- **Step Functions tem latência alta** mesmo em AWS real (P99 reportado pela AWS é ~50-200ms para Standard mode, nosso teste em LocalStack ficou em 2s).
+- **Step Functions tem latência alta** mesmo em AWS real (P99 reportado pela AWS é ~50-200ms para Standard mode, o teste em LocalStack ficou em 2s).
 - **Step Functions tem lock-in profundo** — refazer o estudo seria rewrite caso AWS ficasse caro ou mudasse pricing.
-- **Step Functions custa $51k/ano** no nosso volume — próximo do Temporal Cloud.
+- **Step Functions custa $51k/ano** no volume considerado — próximo do Temporal Cloud.
 
-**Recomendação não muda:** Temporal continua sendo a opção certa, agora com 3ª PoC servindo como evidência adicional.
+**Recomendação não muda:** Temporal segue como opção mais bem posicionada, com a 3ª PoC servindo como evidência adicional.
 
-Step Functions é viável para casos específicos (workflows curtos, baixo volume, time já AWS-native), mas para padrão organizacional dos 4 sistemas com volume estimado, perde para Temporal nos critérios qualitativos e não compensa via custo.
+Step Functions é viável para casos específicos (workflows curtos, baixo volume, time já AWS-native), mas para um padrão organizacional cobrindo múltiplos serviços com volume estimado, perde para Temporal nos critérios qualitativos e não compensa via custo.

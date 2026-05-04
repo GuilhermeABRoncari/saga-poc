@@ -1,12 +1,24 @@
 # Findings: PoC RabbitMQ — medições para [`recomendacao-saga.md`](./recomendacao-saga.md) §3.2
 
-> Documento vivo. Atualizado conforme medimos cada critério. Quando todos os critérios estiverem preenchidos aqui (e o equivalente para Temporal), é hora de fechar a recomendação.
+> Documento vivo. Atualizado conforme cada critério é medido. Quando todos os critérios estiverem preenchidos aqui (e o equivalente para Temporal), é hora de fechar a recomendação.
 >
-> ## ⚠️ Escopo (atualização 2026-04-30)
+> ## Atualização 2026-05-04 — RabbitMQ 4.3
 >
-> Este documento mede **RabbitMQ no modelo orquestrado** — orquestrador central + state machine no banco (`saga_states`/`saga_steps`) + lib `mobilestock/saga` controlando ordem de steps e disparando compensação LIFO.
+> A PoC foi originalmente medida em **RabbitMQ 3.13** (Mnesia metadata store). Em 2026-05-04 todas as medições afetadas foram refeitas em **RabbitMQ 4.3** (Khepri/Raft metadata store, Mnesia removido). Imagem: `rabbitmq:4.3-management-alpine`. Resumo dos deltas relevantes:
 >
-> Após pré-review com o tech lead em 2026-04-30, ficou claro que a proposta original era **RabbitMQ coreografado** — sem orquestrador, sem state machine, lib mínima detectando erro num step e publicando evento `saga.failed` consumido por handlers idempotentes em cada serviço. Esse modelo **não foi medido aqui** e está pendente em 4ª PoC (`saga-rabbitmq-coreografado/`).
+> - **Memória idle do broker:** 141 MB → **108 MiB** (−23%, ganho do Khepri vs Mnesia em single-node).
+> - **Throughput batch (T1.3, 100 sagas concorrentes):** 2076 ms (48 sagas/s) → **705 ms (~142 sagas/s)** — quase **3× mais rápido**.
+> - **Sustained load (T3.3, 5 min × 10 sagas/s):** 2909 → **2959 sagas/300s** (+1.7%); broker volta ao baseline pós-load (mesma assinatura "transport ephemeral" de 3.13).
+> - **T1.4 broker caído:** comportamento da lib **não muda** — workers `php-amqplib` continuam crashando com `AMQPConnectionClosedException` e não auto-reconectam. Khepri afeta apenas o lado server. Gap arquitetural permanece idêntico.
+> - **LOC:** sem alteração (520 LOC totais entre lib + handlers, igual a 3.13).
+>
+> **Implicação para HA em produção:** RabbitMQ 4.0+ removeu **classic mirrored queues**. Para HA daqui pra frente, é **quorum queues obrigatório** — semântica diferente de ack, redelivery e priority. Isso muda parte da estimativa de adoção e está registrado em §1.2.x novo.
+>
+> ## Escopo (atualização 2026-04-30)
+>
+> Este documento mede **RabbitMQ no modelo orquestrado** — orquestrador central + state machine no banco (`saga_states`/`saga_steps`) + uma biblioteca interna de saga controlando ordem de steps e disparando compensação LIFO.
+>
+> Em iteração posterior, ficou identificado que faltava medir **RabbitMQ coreografado** — sem orquestrador, sem state machine, lib mínima detectando erro num step e publicando evento `saga.failed` consumido por handlers idempotentes em cada serviço. Esse modelo **não foi medido aqui** e está coberto em uma 4ª PoC dedicada (`saga-rabbitmq-coreografado/`).
 >
 > **Como ler este documento:** todos os números, comparações com Temporal, e em especial o achado T5.1 (silent corruption sob reordenamento) referem-se ao modelo orquestrado. Não generalizar para "RabbitMQ é ruim para saga" — referem-se a "RabbitMQ-orquestrado tem essas características vs Temporal-orquestrado".
 
@@ -18,9 +30,9 @@ PoC vivo: [`../saga-rabbitmq/`](../saga-rabbitmq/).
 
 | Métrica                             | Valor                                       |
 | ----------------------------------- | ------------------------------------------- |
-| Sessão de implementação             | 1 (∼2h, contando bugs)                      |
+| Sessão de implementação             | 1 (~2h, contando bugs)                      |
 | LOC totais                          | 632 (PHP em `src/` + `bin/`)                |
-| LOC da lib `mobilestock/saga`       | 381 (6 arquivos)                            |
+| LOC da lib interna de saga          | 381 (6 arquivos)                            |
 | LOC da saga + handlers de aplicação | 111 (6 arquivos)                            |
 | LOC de bootstrap (`bin/`)           | 140                                         |
 | Composer deps                       | 3 (`php-amqplib`, `ramsey/uuid`, `monolog`) |
@@ -34,7 +46,7 @@ PoC vivo: [`../saga-rabbitmq/`](../saga-rabbitmq/).
 4. Composer install no Alpine quebra sem `linux-headers` (sockets) e `sqlite-dev` (pdo_sqlite).
 5. Gitignore `storage/*.sqlite` é ancorado à raiz; arquivos em subdiretórios escaparam. Fix: `**/storage/*.sqlite`.
 
-**Observação:** os bugs 1 e 2 são _bugs de ergonomia da lib_ — precisam ficar resolvidos no pacote interno antes de ser oferecido a outros times.
+**Observação:** os bugs 1 e 2 são _bugs de ergonomia da lib_ — precisariam ficar resolvidos no pacote interno antes de ser oferecido a outros times.
 
 ---
 
@@ -45,7 +57,7 @@ PoC vivo: [`../saga-rabbitmq/`](../saga-rabbitmq/).
 | LOC dedicadas a compensação na lib                           | ~25 (`SagaOrchestrator::compensate` + handler de comandos de compensação) |
 | LOC de handlers de compensação                               | ~30 (release_stock, refund_credit)                                        |
 | Tempo adicional para implementar compensação após happy path | irrelevante — feito no mesmo ciclo                                        |
-| Padrão LIFO automático                                       | ✅ implementado na lib                                                    |
+| Padrão LIFO automático                                       | implementado na lib                                                       |
 
 Compensação **funcionou** ponta a ponta com `FORCE_FAIL=step3`: orchestrator detectou falha, disparou `refund_credit` (step 1) → `release_stock` (step 0) com IDs propagados corretamente.
 
@@ -73,7 +85,7 @@ Compensação **funcionou** ponta a ponta com `FORCE_FAIL=step3`: orchestrator d
 
 ## 4. Esforço para observabilidade aceitável (estimativa)
 
-Para chegar a "mínimo aceitável" (timeline básica + alerta de compensação falha + dashboard de sagas em andamento), estimo:
+Para chegar a "mínimo aceitável" (timeline básica + alerta de compensação falha + dashboard de sagas em andamento), a estimativa é:
 
 | Componente                                                                             | Esforço estimado             |
 | -------------------------------------------------------------------------------------- | ---------------------------- |
@@ -117,7 +129,7 @@ Cenários executados em ambiente local com Docker Compose. Cada cenário foi **e
 
 **Setup:** `SLOW_RESERVE_STOCK=10` (handler do step 0 dorme 10s). Trigger saga, mata `service-a` enquanto está no sleep, restart sem delay.
 
-**Resultado:** ✅ saga completa automaticamente.
+**Resultado:** saga completa automaticamente.
 
 **Por quê:** mensagem em `saga.commands.service-a` ficou unacked quando o container morreu → RabbitMQ marcou `redelivered=true` → quando container voltou, processou e ackou normalmente. Saga prossegue.
 
@@ -125,7 +137,7 @@ Cenários executados em ambiente local com Docker Compose. Cada cenário foi **e
 
 **Setup:** mesmo delay de 10s. Trigger saga, mata orchestrator enquanto step 0 está sendo processado (sleep). Espera 12s (step 0 termina e publica `step.completed` em `saga.events` para fila vazia de consumer). Restart orchestrator.
 
-**Resultado:** ✅ saga completa automaticamente.
+**Resultado:** saga completa automaticamente.
 
 **Por quê:** durante a janela em que orchestrator estava morto, eventos de `step.completed` se acumularam em `saga.events` (queue durable). Quando orchestrator voltou, consumiu o backlog → despachou próximos comandos → saga finalizou.
 
@@ -181,6 +193,17 @@ Não medido formalmente. Observações qualitativas do dev local:
 
 Em produção, operação do RabbitMQ é trabalho dedicado. Não trivial, mas conhecido.
 
+### 7.1 Implicações de adoção em RabbitMQ 4.x (atualização 2026-05-04)
+
+A partir do 4.0, **classic mirrored queues foram removidas** do produto. Para HA (cenário de produção real), a única opção suportada é **quorum queues** + Khepri. Diferenças relevantes vs classic-mirrored:
+
+- **Replicação Raft em vez de leader-follower assíncrono**: minoria perde escritas → mais seguro, mas exige cluster ímpar (3, 5 nós) e tolera apenas N/2−1 falhas.
+- **`basic.cancel` em vez de fechar canal** quando consumer estoura timeout: a lib precisa tratar `Closure` graciosamente em vez de assumir que channel-closed = morte.
+- **`acquired-count` vs `delivery-count`**: returns sem falha não contam para limites de poison message — muda a heurística de DLX.
+- **Priority de mensagem**: era 2:1 ratio em classic, agora **strict ordering em 32 níveis** em quorum. Se a lib usar prioridade, comportamento muda.
+
+**Impacto na estimativa de adoção:** a lista de débitos pré-produção em `consideracoes.md` ganha um item — _redesenhar declaração de filas para quorum_, com testes específicos de redelivery sob falha de líder Raft. Custo: ~2-3 dias.
+
 ---
 
 ## 8. Custo projetado 12 meses
@@ -190,20 +213,20 @@ Em produção, operação do RabbitMQ é trabalho dedicado. Não trivial, mas co
 | Infra                                                      | 3 nodes c/ RAM/CPU dedicados (~$200-400/mês AWS) | $100-200/mês (Essentials/Growth)                   |
 | Engenharia para construir lib + observabilidade            | 3-5 dias inicial + manutenção recorrente         | 0 (lib do Temporal já existe; só RoadRunner setup) |
 | Engenharia para operar                                     | 1 dia/mês (médio, monitoring + DLX)              | 0 (Cloud) ou ~1 dia/mês (self-hosted EKS)          |
-| Risco de outage por bug nosso na lib                       | médio-alto (código novo)                         | baixo (Temporal core)                              |
+| Risco de outage por bug em lib interna                     | médio-alto (código novo)                         | baixo (Temporal core)                              |
 | **Comparação justa só vai ser feita após PoC do Temporal** |                                                  |                                                    |
 
 ---
 
 ## 9. Risco de SDK/lib decair
 
-### `mobilestock/laravel-saga` (que estamos esboçando)
+### Biblioteca interna de saga (a desenvolver)
 
 - **Bus factor**: 1 (quem escreveu).
 - **Mantenedores**: time interno; depende de prioridade contínua.
 - **Roadmap**: ad-hoc; sem garantia de manutenção quando autor sai.
 - **Documentação**: precisaria ser construída do zero.
-- **Casos extremos**: precisaríamos descobrir todos sozinhos (crash recovery, idempotência, deduplicação) — e cada um custa engenharia.
+- **Casos extremos**: precisariam ser descobertos sozinhos (crash recovery, idempotência, deduplicação) — e cada um custa engenharia.
 
 ### Comparação com SDK `temporal/sdk`
 
@@ -212,7 +235,7 @@ Em produção, operação do RabbitMQ é trabalho dedicado. Não trivial, mas co
 - Risco real: ser de "segunda classe" frente a Go/Java. Mitigação: lib interna que isola apps do SDK.
 - Atualizações regulares, segue versões do core Temporal.
 
-**Conclusão preliminar:** lib interna RabbitMQ tem risco maior de decair, mas o gap pode ser mitigado com disciplina + testes — desde que a empresa pague esse custo continuamente.
+**Conclusão preliminar:** uma lib interna sobre RabbitMQ tem risco maior de decair, mas o gap pode ser mitigado com disciplina + testes — desde que o investimento na manutenção seja contínuo.
 
 ---
 

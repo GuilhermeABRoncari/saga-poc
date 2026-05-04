@@ -1,11 +1,11 @@
 # Integração Laravel ↔ AWS Step Functions — passo a passo
 
-Como adotar **AWS Step Functions** como padrão organizacional, partindo da stack atual (Laravel + Docker Swarm) e do exemplo concreto: `StoreController@activate` no `marketplace-api` (PR #2021).
+Como adotar **AWS Step Functions** como padrão organizacional, partindo de uma stack Laravel + Docker Swarm. O exemplo concreto usado ao longo deste guia é um fluxo de criação de pedido com reserva de estoque + cobrança + confirmação, implementado como `ActivateStoreSaga`.
 
 Premissas em vigor:
 
-- Apenas `marketplace-api` migra para EKS inicialmente; demais ficam em Swarm por tempo indeterminado (ver `project_infra_eks_gradual.md`).
-- Conta AWS já existente; região alvo `us-east-1` (mesma do EKS).
+- Apenas o serviço Laravel principal (`order-service`) migra para Kubernetes inicialmente; demais serviços ficam em Swarm por tempo indeterminado, configurando uma stack híbrida Docker Swarm + Kubernetes.
+- Conta AWS já existente; região alvo `us-east-1` (mesma do cluster Kubernetes).
 - Step Functions é serviço **gerenciado AWS** — sem cluster próprio pra operar, mas custo por transição de state e lock-in elevado.
 
 > ⚠️ **Aviso**: este caminho foi avaliado como **não recomendado** (`docs/recomendacao-saga.md` §7 e `findings-step-functions.md`). Vence em zero-ops e durabilidade nativa, mas perde em latência (p99 ~3x Temporal), expressividade (ASL JSON), custo em escala e lock-in AWS. Esta integração existe como referência caso a decisão seja revisitada.
@@ -16,8 +16,8 @@ Premissas em vigor:
 
 1. **Conta AWS com Step Functions habilitado** + IAM roles:
 
-   - `MarketplaceSagaStateMachineRole`: assume role do Step Functions, permissions `states:StartExecution`, `states:DescribeExecution`, e ARNs das **Activities** (definidas como AWS Activities, não Lambdas).
-   - `MarketplaceSagaWorkerRole`: usado pelos pods que pollam Activities — `states:GetActivityTask`, `states:SendTaskSuccess`, `states:SendTaskFailure`, `states:SendTaskHeartbeat`.
+   - `OrderSagaStateMachineRole`: assume role do Step Functions, permissions `states:StartExecution`, `states:DescribeExecution`, e ARNs das **Activities** (definidas como AWS Activities, não Lambdas).
+   - `OrderSagaWorkerRole`: usado pelos pods que pollam Activities — `states:GetActivityTask`, `states:SendTaskSuccess`, `states:SendTaskFailure`, `states:SendTaskHeartbeat`.
 
 2. **Decisão de execução**: `STANDARD` vs `EXPRESS`:
 
@@ -38,7 +38,7 @@ Premissas em vigor:
        └── prod/main.tf
    ```
 
-4. **Egress + VPC endpoints**: pods do EKS precisam de `com.amazonaws.us-east-1.states` (Step Functions) endpoint pra evitar tráfego pela internet pública. Ou NAT gateway, se aceitarem o custo.
+4. **Egress + VPC endpoints**: pods do Kubernetes precisam de `com.amazonaws.us-east-1.states` (Step Functions) endpoint pra evitar tráfego pela internet pública. Ou NAT gateway, se aceitarem o custo.
 
 ---
 
@@ -46,7 +46,7 @@ Premissas em vigor:
 
 LocalStack emula Step Functions razoavelmente bem (ver `saga-step-functions/docker-compose.yml` deste PoC). Para dev:
 
-`marketplace-api/docker-compose.override.yml`:
+`order-service/docker-compose.override.yml`:
 
 ```yaml
 services:
@@ -72,7 +72,7 @@ services:
       AWS_SECRET_ACCESS_KEY: test
     command: ["php", "artisan", "saga:bootstrap"] # cria activities + state machine
 
-  saga-worker-marketplace:
+  saga-worker-order:
     build: { context: ., target: cli }
     depends_on:
       { saga-bootstrap: { condition: service_completed_successfully } }
@@ -81,8 +81,8 @@ services:
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
-      WORKER_NAME: marketplace
-    command: ["php", "artisan", "saga:worker", "marketplace"]
+      WORKER_NAME: order
+    command: ["php", "artisan", "saga:worker", "order"]
 ```
 
 > **Limitação LocalStack**: sem CloudWatch Metrics realísticos. Testes de carga e cost projection só fazem sentido contra AWS real (staging account).
@@ -93,7 +93,7 @@ services:
 
 Step Functions não exige `grpc` nem RoadRunner — basta `aws/aws-sdk-php` e loop polling.
 
-`marketplace-api/Dockerfile`:
+`order-service/Dockerfile`:
 
 ```dockerfile
 FROM php:8.3-cli-alpine AS base
@@ -115,7 +115,7 @@ FROM base AS cli
 CMD ["php", "artisan"]
 ```
 
-CI publica `marketplace-api:1.x.y-api` e `marketplace-api:1.x.y-cli`.
+CI publica `order-service:1.x.y-api` e `order-service:1.x.y-cli`.
 
 ---
 
@@ -128,8 +128,8 @@ Diferente das outras opções, aqui o pacote interno é menor — Step Functions
 - Mapeamento de exceptions PHP → ASL `Error`.
 
 ```bash
-cd marketplace-api
-composer require mobilestock/laravel-step-functions:^1.0 aws/aws-sdk-php:^3.336 ramsey/uuid:^4.7
+cd order-service
+composer require acme/laravel-step-functions:^1.0 aws/aws-sdk-php:^3.336 ramsey/uuid:^4.7
 php artisan vendor:publish --tag=sfn-config
 ```
 
@@ -148,7 +148,7 @@ return [
         'confirm-shipping' => env('SFN_ACTIVITY_CONFIRM_SHIPPING_ARN'),
     ],
     'workers' => [
-        'marketplace' => [
+        'order' => [
             'reserve-stock'    => [\App\Saga\Activities\ReserveStock::class, 'handle'],
             'release-stock'    => [\App\Saga\Activities\ReleaseStock::class, 'handle'],
             'confirm-shipping' => [\App\Saga\Activities\ConfirmShipping::class, 'handle'],
@@ -327,7 +327,7 @@ resource "aws_sfn_state_machine" "activate_store" {
 
 ---
 
-## Fase 5 — Refatorar `StoreController@activate` (1-2 dias)
+## Fase 5 — Refatorar o endpoint de criação de pedido (1-2 dias)
 
 ### 5.1 Antes
 
@@ -336,7 +336,7 @@ Mesmo código síncrono mostrado em `integracao-temporal.md` §4.1.
 ### 5.2 Depois — controller dispara execução
 
 ```php
-// app/Http/Controllers/StoreController.php
+// app/Http/Controllers/OrderController.php
 use Aws\Sfn\SfnClient;
 use Ramsey\Uuid\Uuid;
 
@@ -402,7 +402,7 @@ class ReserveStock
 ### 5.4 Worker (Artisan command, fornecido pelo pacote)
 
 ```php
-// vendor/mobilestock/laravel-step-functions/src/Console/RunWorkerCommand.php
+// vendor/acme/laravel-step-functions/src/Console/RunWorkerCommand.php
 class RunWorkerCommand extends Command
 {
     protected $signature = 'saga:worker {pool}';
@@ -445,31 +445,31 @@ class RunWorkerCommand extends Command
 }
 ```
 
-Local: `php artisan saga:worker marketplace`.
+Local: `php artisan saga:worker order`.
 
 ---
 
-## Fase 6 — Manifestos EKS (workers) (2-3 dias)
+## Fase 6 — Manifestos Kubernetes (workers) (2-3 dias)
 
-`k8s/marketplace-api/saga-worker-deployment.yaml`:
+`k8s/order-service/saga-worker-deployment.yaml`:
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: marketplace-saga-worker
-  namespace: marketplace
+  name: order-saga-worker
+  namespace: order
 spec:
   replicas: 5 # workers fazem long-poll bloqueante; 1 worker = 1 task em paralelo
   template:
     metadata:
-      labels: { app: marketplace-saga-worker }
+      labels: { app: order-saga-worker }
     spec:
-      serviceAccountName: marketplace-saga-worker # IRSA → MarketplaceSagaWorkerRole
+      serviceAccountName: order-saga-worker # IRSA → OrderSagaWorkerRole
       containers:
         - name: worker
-          image: registry.mobilestock.io/marketplace-api:1.x.y-cli
-          command: ["php", "artisan", "saga:worker", "marketplace"]
+          image: registry.example.com/order-service:1.x.y-cli
+          command: ["php", "artisan", "saga:worker", "order"]
           env:
             - { name: AWS_REGION, value: "us-east-1" }
             - name: SFN_ACTIVITY_RESERVE_STOCK_ARN
@@ -490,48 +490,48 @@ ServiceAccount com IRSA:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: marketplace-saga-worker
-  namespace: marketplace
+  name: order-saga-worker
+  namespace: order
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::1234:role/MarketplaceSagaWorkerRole
+    eks.amazonaws.com/role-arn: arn:aws:iam::1234:role/OrderSagaWorkerRole
 ```
 
-> **Importante**: `replicas` precisa ser dimensionado pelo **paralelismo desejado de tasks**, não por CPU/RAM. Cada worker pollando uma activity tem **uma task em vôo por vez**. Para suportar 50 ativações de loja simultâneas com 3 activities cada, são ~50 workers (na prática ~15-20 com latência de polling). HPA por CPU é inútil aqui — `task_schedule_to_start_latency` do CloudWatch é o sinal correto.
+> **Importante**: `replicas` precisa ser dimensionado pelo **paralelismo desejado de tasks**, não por CPU/RAM. Cada worker pollando uma activity tem **uma task em vôo por vez**. Para suportar 50 ativações simultâneas com 3 activities cada, são ~50 workers (na prática ~15-20 com latência de polling). HPA por CPU é inútil aqui — `task_schedule_to_start_latency` do CloudWatch é o sinal correto.
 
 ---
 
-## Fase 7 — Cross-service (chamada pra users-api) (~3-5 dias por serviço)
+## Fase 7 — Cross-service (chamada pra `payment-service`) (~3-5 dias por serviço)
 
-Mesma estrutura: `users-api` instala `mobilestock/laravel-step-functions`, registra handlers de `charge-credit` e `refund-credit`, roda worker próprio.
+Mesma estrutura: o `payment-service` instala `acme/laravel-step-functions`, registra handlers de `charge-credit` e `refund-credit`, roda worker próprio.
 
-`users-api/config/step-functions.php`:
+`payment-service/config/step-functions.php`:
 
 ```php
 'workers' => [
-    'users' => [
+    'payment' => [
         'charge-credit' => [\App\Saga\ChargeCredit::class, 'handle'],
         'refund-credit' => [\App\Saga\RefundCredit::class, 'handle'],
     ],
 ],
 ```
 
-`users-api` Deployment (Swarm, ainda):
+`payment-service` Deployment (Swarm, ainda):
 
 ```yaml
 version: "3.8"
 services:
   saga-worker:
-    image: registry.mobilestock.io/users-api:1.x.y-cli
-    command: ["php", "artisan", "saga:worker", "users"]
+    image: registry.example.com/payment-service:1.x.y-cli
+    command: ["php", "artisan", "saga:worker", "payment"]
     deploy:
       replicas: 5
     environment:
       AWS_REGION: us-east-1
-      AWS_ACCESS_KEY_ID_FILE: /run/secrets/users-saga-aws-key
-      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/users-saga-aws-secret
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/payment-saga-aws-key
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/payment-saga-aws-secret
       SFN_ACTIVITY_CHARGE_CREDIT_ARN: arn:aws:states:us-east-1:1234:activity:charge-credit-prod
       SFN_ACTIVITY_REFUND_CREDIT_ARN: arn:aws:states:us-east-1:1234:activity:refund-credit-prod
-    secrets: [users-saga-aws-key, users-saga-aws-secret]
+    secrets: [payment-saga-aws-key, payment-saga-aws-secret]
 ```
 
 > **Atenção**: Swarm não tem IRSA — workers em Swarm precisam de **IAM user fixo** com chaves estáticas em Secrets do Swarm. Risco de chave vazada permanente. Mitigação: rotação trimestral via SecretsManager + redeploy automático.
@@ -540,7 +540,7 @@ services:
 
 ## Fase 8 — Observabilidade e operação (3-5 dias)
 
-CloudWatch dá observabilidade out-of-the-box, mas precisa integração com Datadog se não quiserem usar Console AWS:
+CloudWatch dá observabilidade out-of-the-box, mas precisa integração com Datadog se a equipe não quiser usar Console AWS:
 
 1. **CloudWatch → Datadog**: integração nativa via `AWS Integration` plugin. Métricas:
    - `AWS/States.ExecutionsStarted/Succeeded/Failed/Aborted/TimedOut`.
@@ -566,9 +566,9 @@ Step Functions cobra **por transição de state**. ActivateStoreSaga típica = 3
 | 100k sagas/dia | ~9M            | ~$225                |
 | 1M sagas/dia   | ~90M           | ~$2.250              |
 
-A 4 sistemas × M sagas/dia em escala, custo SFN supera self-host Temporal em EKS rapidamente. Adicionar dashboard custom em Datadog/AWS Cost Explorer com alerta em $X/mês é obrigatório.
+A múltiplos serviços × M sagas/dia em escala, custo SFN supera self-host Temporal em Kubernetes rapidamente. Adicionar dashboard custom em Datadog/AWS Cost Explorer com alerta em $X/mês é obrigatório.
 
-> **Lock-in nota**: state machines são definidas em ASL JSON proprietária. Migrar pra Temporal/RabbitMQ depois exige reescrever orquestração + versionamento. Custo de saída é alto e cresce com o número de sagas — é o item-chave que peso ranqueou Step Functions abaixo de Temporal em `recomendacao-saga.md` §5.
+> **Lock-in nota**: state machines são definidas em ASL JSON proprietária. Migrar pra Temporal/RabbitMQ depois exige reescrever orquestração + versionamento. Custo de saída é alto e cresce com o número de sagas — é o item-chave que ranqueou Step Functions abaixo de Temporal em `recomendacao-saga.md` §5.
 
 ---
 
@@ -581,8 +581,8 @@ A 4 sistemas × M sagas/dia em escala, custo SFN supera self-host Temporal em EK
 | 2. Dockerfile                                       | 1 dia                | Backend          |
 | 3. Pacote interno + SDK AWS                         | 1 dia                | Backend          |
 | 4. State machine ASL + Terraform                    | 3-5 dias             | DevOps + Backend |
-| 5. Refator `activate` + handlers                    | 1-2 dias             | Backend          |
-| 6. Manifestos EKS workers (IRSA)                    | 2-3 dias             | DevOps           |
+| 5. Refator do endpoint + handlers                   | 1-2 dias             | Backend          |
+| 6. Manifestos Kubernetes workers (IRSA)             | 2-3 dias             | DevOps           |
 | 7. Cross-service (por serviço)                      | 3-5 dias por serviço | Backend          |
 | 8. Observabilidade (CloudWatch → Datadog + alertas) | 3-5 dias             | SRE              |
 | 9. Cost dashboard + budget alerts                   | 1-2 dias             | SRE              |
@@ -596,12 +596,12 @@ Comparável ao Temporal em esforço — a economia em "lib interna não precisa 
 
 - [ ] State machine `activate-store-prod` criada via Terraform (não Console).
 - [ ] Activities ARNs publicados como ConfigMap/Secret pros workers.
-- [ ] IRSA configurada para workers EKS; chaves IAM estáticas para workers Swarm em Secret rotacionável.
+- [ ] IRSA configurada para workers Kubernetes; chaves IAM estáticas para workers Swarm em Secret rotacionável.
 - [ ] CloudWatch Logs habilitado (`level: ALL`) e integrado a Datadog.
 - [ ] X-Ray habilitado.
-- [ ] `marketplace-saga-worker` ≥5 replicas (calibrado por carga esperada, não CPU).
-- [ ] `users-saga-worker` ≥3 replicas (Swarm).
-- [ ] `StoreController@activate` retorna 202 com `executionArn`.
+- [ ] `order-saga-worker` ≥5 replicas (calibrado por carga esperada, não CPU).
+- [ ] `payment-saga-worker` ≥3 replicas (Swarm).
+- [ ] Endpoint de criação de pedido retorna 202 com `executionArn`.
 - [ ] `GET /sagas/{arn}` retorna status correto.
 - [ ] Teste E2E: happy path + FORCE_FAIL=step3 verifica compensação completa.
 - [ ] Budget alert configurado em $X/mês com PagerDuty.
