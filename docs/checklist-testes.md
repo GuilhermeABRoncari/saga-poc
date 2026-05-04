@@ -138,7 +138,7 @@
 - **Como executou:**
   - Criados dois alerters (`saga-rabbitmq/bin/alerter.php` e `saga-temporal/bin/alerter.php`), cada um adicionado como service no respectivo `docker-compose.yml`. Output formatado em arquivo `/app/storage/alerts.log` + stderr.
   - **RabbitMQ alerter:** poll em SQLite a cada 2s — `SELECT id, status, current_step, updated_at FROM sagas WHERE status='FAILED'` + cache de IDs já alertados em memória.
-  - **Temporal alerter:** poll via `WorkflowClient::listWorkflowExecutions()` com filtro `WorkflowType='ActivateStoreSaga' AND ExecutionStatus='Failed'` a cada 2s + cache de IDs já alertados.
+  - **Temporal alerter:** poll via `WorkflowClient::listWorkflowExecutions()` com filtro `WorkflowType='ReferenceSaga' AND ExecutionStatus='Failed'` a cada 2s + cache de IDs já alertados.
   - Disparado cenário de falha terminal em ambos (`FORCE_FAIL=step3 FAIL_COMPENSATION=refund`), os dois alerters detectaram e logaram.
 - **Resultado RabbitMQ:**
   - LOC do alerter: **41 linhas** (script standalone, sem dependências adicionais — usa `PDO` que já estava no projeto).
@@ -256,15 +256,15 @@
   - Temporal stack: 5 imagens × ~762-787 MB = **~3800 MB total** (dominado por RoadRunner + PECL grpc)
 - **Memória idle (após 30s sem tráfego):**
 
-| Container                    | RabbitMQ stack                | Temporal stack                                    |
-| ---------------------------- | ----------------------------- | ------------------------------------------------- |
-| broker / server              | rabbitmq: **108 MiB** (4.3)   | postgres: 143 MB + temporal: 78 MB = **221 MB**   |
-| ui                           | (Mgmt UI embarcada no broker) | temporal-ui: **4 MB**                             |
-| orchestrator/workflow worker | orchestrator: **6.6 MB**      | workflow-worker: **64.6 MB**                      |
-| service-a worker             | service-a: **8.2 MB**         | service-a-worker: **64.5 MB**                     |
-| service-b worker             | service-b: **8.2 MB**         | service-b-worker: **64.2 MB**                     |
-| alerter                      | alerter: **5.8 MB**           | alerter: **18.9 MB**                              |
-| **Total idle**               | **~137 MiB** (4.3)            | **~439 MB** (~3.2x)                               |
+| Container                    | RabbitMQ stack                | Temporal stack                                  |
+| ---------------------------- | ----------------------------- | ----------------------------------------------- |
+| broker / server              | rabbitmq: **108 MiB** (4.3)   | postgres: 143 MB + temporal: 78 MB = **221 MB** |
+| ui                           | (Mgmt UI embarcada no broker) | temporal-ui: **4 MB**                           |
+| orchestrator/workflow worker | orchestrator: **6.6 MB**      | workflow-worker: **64.6 MB**                    |
+| service-a worker             | service-a: **8.2 MB**         | service-a-worker: **64.5 MB**                   |
+| service-b worker             | service-b: **8.2 MB**         | service-b-worker: **64.2 MB**                   |
+| alerter                      | alerter: **5.8 MB**           | alerter: **18.9 MB**                            |
+| **Total idle**               | **~137 MiB** (4.3)            | **~439 MB** (~3.2x)                             |
 
 - **Comparação:** Temporal stack ~2.6x mais pesado em idle. Imagens ~6x maiores no disco. RabbitMQ tem footprint de "transport puro"; Temporal carrega Postgres + history + RoadRunner workers.
 - **Notas:** para devs locais com 16GB+ RAM, ambos rodam sem problema. Para CI runners com 4GB de RAM, Temporal pode forçar tuning. RabbitMQ não tem essa preocupação no volume avaliado.

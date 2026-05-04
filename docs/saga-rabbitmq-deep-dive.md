@@ -104,9 +104,9 @@ Confirmação de processamento:
 
 | Fila      | Mensagem            | Sobrevive reinício? |
 | --------- | ------------------- | ------------------- |
-| durable   | persistent (mode 2) | ✅ Sim              |
-| durable   | transient (mode 1)  | ❌ Mensagem perdida |
-| transient | qualquer            | ❌ Tudo perdido     |
+| durable   | persistent (mode 2) | Sim                 |
+| durable   | transient (mode 1)  | Não (msg perdida)   |
+| transient | qualquer            | Não (tudo perdido)  |
 
 ---
 
