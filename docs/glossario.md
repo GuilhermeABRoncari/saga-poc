@@ -150,7 +150,7 @@
 | `[~]`   | Em andamento OU executado parcialmente                                                     |
 | `[x]`   | Executado, resultado anotado                                                               |
 | `[!]`   | Executado, identificou bloqueio/bug que precisa ser tratado antes de continuar             |
-| `[⏭]`  | Pulado / não-executável neste contexto (ex.: requer dev externo, requer credenciais Cloud) |
+| `[⏭]`   | Pulado / não-executável neste contexto (ex.: requer dev externo, requer credenciais Cloud) |
 
 ---
 

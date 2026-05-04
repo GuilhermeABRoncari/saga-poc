@@ -185,6 +185,33 @@ Quando NÃO usar a recomendação principal de cada combinação:
 
 ---
 
+## 5.1 Decisão de design da lib (caso RabbitMQ seja a escolha)
+
+Se a recomendação final apontar para RabbitMQ, a lib interna que precisa ser construída de qualquer forma segue duas regras claras:
+
+1. **v1 implementa apenas o modelo coreografado.** Coreografia resolve a maior parte dos casos esperados (fluxos curtos, multi-squad, baixo acoplamento) e é o caminho que o estudo recomenda como default por anti-padrões já registrados. Construir orquestrado em v1 é trabalho que ninguém vai usar imediatamente.
+
+2. **Design da v1 não fecha a porta para orquestrado em v2.** Significa código defensável hoje — não código especulativo:
+
+   | Princípio                                                    | O que entra na v1                                         | O que NÃO entra                                          |
+   | ------------------------------------------------------------ | --------------------------------------------------------- | -------------------------------------------------------- |
+   | Transport genérico (publish/consume/reconnect/dedup)         | sim                                                       | —                                                        |
+   | Convenção `saga_id` + `saga_name` em todo evento e job       | sim (necessário para idempotência da coreografia)         | —                                                        |
+   | `failed()` publica `saga.<id>.failed`; consumers compensam   | sim                                                       | —                                                        |
+   | `step_log` + `compensation_log` local por serviço            | sim (validado em PoC)                                     | —                                                        |
+   | Interface comum `SagaModelInterface` para os dois modelos    | —                                                         | **não** — não há segundo modelo para justificar          |
+   | Tabela `saga_definitions` ou `saga_states` central           | —                                                         | **não** — coreografia não usa, e v1 é só coreografia     |
+   | Orquestrador "minimal" sem usuário                           | —                                                         | **não** — código sem usuário é dívida, não preparação    |
+   | Hierarquia de classes pré-criada para o segundo modelo       | —                                                         | **não** — refator quando o segundo modelo entrar é menor |
+
+3. **Gatilho explícito para reabrir o orquestrado.** Adicionar suporte a orquestração na lib só vira escopo se aparecer um caso real concreto: 3+ sagas com 5+ steps em fluxos cross-team com requisito de timeline visual centralizada. Sem gatilho, a porta aberta vira encruzilhada permanente — e a equipe acaba abstraindo no ar para o caso que nunca chega.
+
+4. **Versionamento semântico explícito.** v1.x cobre coreografado. Se um dia entrar orquestrado, vai como v2.0 — major version bump, com aviso de breaking change se for o caso. Isso impede a tentação de smuggling silencioso de novo modelo via minor release.
+
+**Resumo da decisão:** v1 é "coreografado bem feito"; "expansão futura" é princípio de design (transport genérico, naming convention), não código adicional. YAGNI é regra firme — se não está sendo usado hoje, não entra.
+
+---
+
 ## 6. Quando reavaliar a recomendação
 
 A árvore acima reflete o estado do estudo em 2026-05-04. Reavaliar quando:
