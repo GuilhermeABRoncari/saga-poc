@@ -247,7 +247,7 @@ docker compose run --rm service-a php bin/trigger.php
 
 ## Testes Tier 1-6 re-projetados
 
-Ver [`docs/checklist-testes-coreografia.md`](../docs/checklist-testes-coreografia.md) (a criar).
+Ver [`docs/checklist-testes-coreografia.md`](../docs/checklist-testes-coreografia.md) — matriz Tier 1-6 + Tier C (testes específicos do modelo).
 
 Sumário:
 
