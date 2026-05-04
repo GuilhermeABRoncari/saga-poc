@@ -353,7 +353,18 @@
   - **Veredito:** worker sobreviveu a 10s de network outage sem perder estado nem reexecutar a activity.
 - **Notas:**
   - Para testar pior cenário (outage longa que excede `StartToCloseTimeout`), seria preciso > 20s de disconnect — aí o servidor declara timeout, agenda retry, novo worker (ou mesmo após reconexão) reexecuta. Não testado.
-  - **Análogo RabbitMQ não testado** porque T1.4 já mostrou comportamento mais grave: workers caem com broker (sem reconexão automática). Aqui o broker é "rede + Temporal server" — comportamento equivalente esperado: workers PHP da PoC RabbitMQ cairiam com `AMQPProtocolConnectionException` quando reconectam à rede e descobrem que a conexão original morreu.
+
+### T4.1 RabbitMQ — Falha de rede worker↔broker (re-medido 2026-05-04)
+
+- [x] **Executado em 2026-05-04 nas duas PoCs RabbitMQ.**
+- **Como executou (orquestrado):** `SLOW_RESERVE_STOCK=15`, disparou saga `d478daf3`, `docker network disconnect saga-rabbitmq_default saga-rabbitmq-service-a-1` aos 3s (durante o sleep), aguardou 12s, reconectou. Repetido com 75s de outage para forçar timeout do heartbeat AMQP default (60s) — saga `a3baa4c9`.
+- **Como executou (coreografado):** mesma metodologia em `saga-rabbitmq-coreografado/` com saga `ecbe6a0a`.
+- **Resultado orquestrado @ 12s outage:** saga COMPLETED. service-a continuou Up, sem crash. Steps `reserve_stock`, `charge_credit`, `confirm_shipping` completaram em sequência após reconexão.
+- **Resultado orquestrado @ 75s outage (>heartbeat):** saga COMPLETED. **Surpresa positiva:** `php-amqplib` tolerou outage maior que o heartbeat default. Provável razão: kernel TCP no Linux mantém o socket aberto durante `docker network disconnect`; o stream PHP não tenta enviar dados durante o `sleep()` do handler, então não há detecção de connection drop. Quando rede volta e o handler tenta `basic_publish`, o socket ressuscita silenciosamente.
+- **Resultado coreografado @ 12s outage:** saga COMPLETED, comportamento equivalente ao orquestrado. EventBus reconnect não foi disparado (não houve detecção de disconnect).
+- **Veredito empírico:** RabbitMQ tolera **network outages curtos do client** (>=75s testado, possivelmente mais) **se o broker continua up**. O gap T1.4 (broker matado, todos workers caem) continua sendo o pior cenário — mas T4.1 mostra que **rede instável do client** sozinha não é problema. Heartbeat do AMQP só dispara timeout quando há tentativa ativa de I/O — durante sleep do handler PHP, conexão ociosa não é monitorada.
+- **Comparação com Temporal T4.1:** mesmo veredito (saga COMPLETED após reconexão), mas razões diferentes: Temporal worker bufferiza resultado em buffer interno e retransmite via gRPC retry; RabbitMQ apenas se beneficia da inércia TCP do kernel.
+- **Implicação para a recomendação:** "RabbitMQ é frágil a falhas de rede" era hipótese; empiricamente, **client robusto a outages curtos** (até pelo menos 75s testados). O risco real é T1.4 (broker indisponível), não T4.1 (rede do client cortada).
 
 ### T4.2 Disco cheio no SQLite (RabbitMQ)
 

@@ -103,12 +103,17 @@
 
 ### T4.1 Network outage durante step
 
-- **[ ] mantido, não executado.** Cenário equivalente ao T1.4 mas com `tc qdisc` em vez de stop/start do broker. Não rodado especificamente. Comportamento esperado: idêntico a T1.4 (lib reconecta com backoff). Recomendação: rodar antes de adoção em produção real.
+- **[x] executado em 2026-05-04.** Saga `ecbe6a0a` disparada com `SLOW_RESERVE_STOCK=15`. `docker network disconnect` no service-a aos 3s, reconnect aos 15s (12s outage). **Resultado: saga COMPLETED.** service-a continuou Up; conexão TCP do `php-amqplib` foi mantida pelo kernel durante o disconnect (sleep do handler não dispara I/O, então heartbeat não detecta). Quando rede voltou, publish de `stock.reserved` sucedeu silenciosamente.
+- **EventBus reconnect não foi disparado** — não houve detecção de connection drop. Mesmo veredito do T4.1 orquestrado: client robusto a outages curtos (até pelo menos 75s testados no orquestrado).
+- **Cenário não testado:** outage longo (>5 min) que ultrapassaria timers de TCP keepalive do kernel. Em produção real com cluster RabbitMQ multi-node, o failover de líder Raft (quorum queues) seria o teste mais relevante — fora do escopo desta PoC single-node.
 
 ### T4.2 Storage indisponível (SQLite local)
 
-- **[ ] adaptado, não executado.** Em coreografado, o `SagaLog` SQLite é local por serviço. Se SQLite ficar indisponível (lock, file system full, permissões), o handler de step ou compensação lança exception. **A exception é capturada pela lib** e republicada como `saga.failed` — diferente do orquestrado, onde o orchestrator daemon trava silenciosamente ao bater em SQLite indisponível. Comportamento previsto melhor que orquestrado, **mas não validado empiricamente**.
-- **Risco residual:** se a falha for em `markStepDone` **depois** do efeito do handler já ter sido aplicado, há inconsistência (efeito existe, log não). Solução clássica é outbox pattern; documentado como achado paralelo no `findings-rabbitmq-coreografado.md` §2.3.
+- **[x] executado em 2026-05-04.** Movido `service-a.sqlite` mid-flight para forçar erro de write. Saga `8233399b` chegou. Handler ReserveStock executou, mas `markStepDone` falhou com `SQLSTATE[HY000]: General error: 8 attempt to write a readonly database`.
+- **Comportamento da lib:** exception capturada pelo `SagaListener::react()`, republicada como `saga.failed` com `error="attempt to write a readonly database"`. service-b consumiu `saga.failed`, tentou compensar — mas `wasStepDone()` retornou false (markStepDone tinha falhado), então compensação foi pulada. **Estado consistente:** saga falhou, nada para reverter (porque o write do efeito real também não persistiu — embora isso dependa de quanto do handler executou antes do erro).
+- **Após restaurar o arquivo:** queue voltou a 0 mensagens, service-a retomou processamento normal de novas sagas.
+- **Diferença vs T4.2 orquestrado:** o orquestrado da PoC mostrou silent corruption (saga ficou stuck em estado inconsistente sem erro propagado). O coreografado **falha alta** via `saga.failed`. Comportamento estruturalmente melhor.
+- **Risco residual conhecido:** se o efeito real do handler (ex.: write no banco do serviço) tiver persistido **antes** do `markStepDone` falhar, há inconsistência (efeito existe, log não, compensação pula). Solução clássica é outbox pattern; documentado em `findings-rabbitmq-coreografado.md` §2.3 como achado paralelo a investigar.
 
 ### T4.3 Falha em step 1 (compensação trivial)
 
@@ -191,24 +196,26 @@ Estes testes não existem no `checklist-testes.md` original porque só fazem sen
 
 ## Sumário comparativo: Tier 1-6 cruzando os modelos
 
-| Tier | Orquestrado RabbitMQ                 | Coreografado RabbitMQ                | Temporal            |
-| ---- | ------------------------------------ | ------------------------------------ | ------------------- |
-| T1.1 | Silent corruption                    | n/a (sem definição central)          | Panic LOUD          |
-| T1.2 | Risco condicional                    | Risco condicional (lib mitiga)       | Estrutural ok       |
-| T1.3 | 142 sagas/s burst                    | ~50 sagas/s end-to-end (single-thr.) | 28 sagas/s          |
-| T1.4 | **Workers crashm**                   | Reconnect ok                         | Reconnect ok        |
-| T2.1 | Construir Filament sobre saga_states | Construir Saga Aggregator (~6 dias)  | Temporal Web grátis |
-| T2.3 | DB mente (gap T2.3)                  | DB distribuído consistente           | Engine consistente  |
-| T3.2 | 137 MiB idle                         | 123 MiB idle                         | 439 MiB idle        |
-| T3.4 | 2-15 min postmortem                  | 2-15 min postmortem                  | 30s-1min            |
-| T4.4 | **Sem timeout**                      | **Sem timeout**                      | 4 tipos             |
-| T5.1 | **Silent corruption**                | n/a (estruturalmente seguro)         | Panic LOUD          |
-| T5.2 | Silent risk                          | Falha alta                           | Falha alta          |
-| T6.2 | p99 23.8ms                           | **p99 20.4ms (mais rápido)**         | p99 351ms           |
-| C1   | n/a                                  | ✅ ok (queue durável)                | (Activity retry)    |
-| C2   | n/a                                  | ⚠ não validado                       | (engine resolve)    |
-| C3   | n/a                                  | ⚠ sem proteção na lib                | (workflow protege)  |
+| Tier | Orquestrado RabbitMQ                 | Coreografado RabbitMQ                | Temporal             |
+| ---- | ------------------------------------ | ------------------------------------ | -------------------- |
+| T1.1 | Silent corruption                    | n/a (sem definição central)          | Panic LOUD           |
+| T1.2 | Risco condicional                    | Risco condicional (lib mitiga)       | Estrutural ok        |
+| T1.3 | 142 sagas/s burst                    | ~50 sagas/s end-to-end (single-thr.) | 28 sagas/s           |
+| T1.4 | **Workers crashm**                   | Reconnect ok                         | Reconnect ok         |
+| T4.1 | Saga ok (até 75s outage)             | Saga ok (até 12s outage)             | Saga ok (10s outage) |
+| T4.2 | Silent corruption                    | Falha alta (saga.failed publicado)   | Workflow pausa       |
+| T2.1 | Construir Filament sobre saga_states | Construir Saga Aggregator (~6 dias)  | Temporal Web grátis  |
+| T2.3 | DB mente (gap T2.3)                  | DB distribuído consistente           | Engine consistente   |
+| T3.2 | 137 MiB idle                         | 123 MiB idle                         | 439 MiB idle         |
+| T3.4 | 2-15 min postmortem                  | 2-15 min postmortem                  | 30s-1min             |
+| T4.4 | **Sem timeout**                      | **Sem timeout**                      | 4 tipos              |
+| T5.1 | **Silent corruption**                | n/a (estruturalmente seguro)         | Panic LOUD           |
+| T5.2 | Silent risk                          | Falha alta                           | Falha alta           |
+| T6.2 | p99 23.8ms                           | **p99 20.4ms (mais rápido)**         | p99 351ms            |
+| C1   | n/a                                  | ✅ ok (queue durável)                | (Activity retry)     |
+| C2   | n/a                                  | ⚠ não validado                       | (engine resolve)     |
+| C3   | n/a                                  | ⚠ sem proteção na lib                | (workflow protege)   |
 
-**Pontos onde coreografia ganha sobre orquestrado:** T1.4, T2.3, T3.2, T5.1, T5.2, T6.2.
+**Pontos onde coreografia ganha sobre orquestrado:** T1.4, T2.3, T3.2, T4.2, T5.1, T5.2, T6.2.
 **Pontos onde coreografia perde para orquestrado:** T2.1 (precisa construir agregador).
 **Pontos onde ambos os modelos RabbitMQ perdem para Temporal:** T2.1 (precisa construir vs Temporal Web grátis), T3.4 (postmortem 2-15 min vs 30s-1min), T4.4 (sem timeout vs 4 tipos).
