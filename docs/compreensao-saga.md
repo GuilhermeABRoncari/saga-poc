@@ -1,207 +1,182 @@
-# Compreensão de SAGA: o que é, o que não é, e onde nosso caso se encaixa
+# Compreensão de SAGA: definição, modelos e exemplo de referência
 
-> Este documento existe porque, durante o estudo, ficou claro que o termo "SAGA" é usado de forma mais ampla do que a definição clássica. O objetivo aqui é separar três coisas:
+> Este documento descreve **o que é o padrão SAGA**, os dois modelos clássicos (orquestração e coreografia), o exemplo de 3 passos usado por todas as PoCs deste estudo, e os casos em que SAGA **não** é a ferramenta certa.
 >
-> 1. O que é **SAGA na literatura** (Garcia-Molina/Salem 1987, Chris Richardson).
-> 2. O que **não é SAGA** (e costuma ser confundido).
-> 3. Como exemplos práticos de workflows multi-serviço se encaixam (ou não) na definição clássica.
+> Para o contexto, premissas e critérios do estudo, ver [`estudo.md`](./estudo.md). Para a recomendação final, ver [`recomendacao-saga.md`](./recomendacao-saga.md). Para vocabulário, ver [`glossario.md`](./glossario.md).
 
 ---
 
-## 1. SAGA na literatura
+## 1. Definição mínima
 
-### Definição mínima
+Uma **SAGA** é uma sequência de transações locais distribuídas em múltiplos serviços/recursos, na qual:
 
-Uma SAGA é uma **sequência de transações locais** distribuídas em múltiplos serviços/recursos, na qual:
+- Cada passo `Tᵢ` é uma transação local com commit atômico no seu próprio recurso.
+- Para cada passo `Tᵢ` existe (idealmente) uma **ação compensatória `Cᵢ`** que desfaz semanticamente o efeito de `Tᵢ`. Não é rollback ACID — é **reversão de negócio**.
+- Se a saga falhar no passo `k`, executam-se `C_{k-1}, C_{k-2}, …, C_1` em ordem reversa: **LIFO**.
 
-- Cada passo `Tᵢ` é uma transação local, com commit atômico no seu próprio recurso.
-- Para cada passo `Tᵢ` existe (idealmente) uma **ação compensatória `Cᵢ`** que desfaz semanticamente o efeito de `Tᵢ` — não é rollback ACID, é reversão de negócio.
-- Se a saga falhar no passo `k`, executa-se `C_{k-1}, C_{k-2}, …, C_1` em ordem reversa (LIFO).
+O conceito surgiu (Garcia-Molina/Salem, 1987) como solução para **long-lived transactions** — operações que não cabem em uma única transação ACID porque atravessam fronteiras de banco/serviço ou levam minutos/dias para concluir. Foi reapropriado por Chris Richardson e outros como padrão arquitetural para microsserviços.
 
-O conceito surgiu como solução para **long-lived transactions** (LLTs): operações que não cabem em uma única transação ACID porque atravessam fronteiras de banco/serviço ou levam minutos/dias para concluir.
+### 1.1 Quando SAGA faz sentido
 
-### Quando SAGA faz sentido
+- A operação envolve **mais de um recurso transacional** — bancos diferentes, serviços diferentes, sistemas externos.
+- 2PC/XA não é viável (caro, bloqueante, indisponível no caso heterogêneo).
+- **Consistência eventual** durante a saga é aceitável (o sistema fica temporariamente em estado intermediário).
+- Cada passo tem uma **inversa de negócio** plausível: cancelar pedido, estornar pagamento, liberar reserva.
 
-- A operação envolve **mais de um recurso transacional** (bancos diferentes, microsserviços diferentes, sistemas externos).
-- Não há possibilidade de XA / 2PC (ou ele é caro/inviável).
-- É aceitável que o sistema fique **temporariamente inconsistente** (consistência eventual) durante a saga.
-- Cada passo tem uma **inversa de negócio** plausível (cancelar pedido, estornar pagamento, liberar reserva).
+### 1.2 Propriedades exigidas dos passos
 
-### Os dois sabores
-
-| Estilo           | Como decide o próximo passo                              | Onde mora a lógica            | Exemplo                                                                                                  |
-| ---------------- | -------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------- |
-| **Coreografia**  | Cada serviço escuta eventos e reage publicando o próximo | Distribuída entre os serviços | `OrderCreated` → estoque reserva → publica `StockReserved` → pagamento cobra → publica `PaymentApproved` |
-| **Orquestração** | Um coordenador central comanda cada passo                | Centralizada no orquestrador  | Workflow do Temporal / `SagaOrchestrator` chamando passo a passo                                         |
-
-### Exemplo canônico (Richardson)
-
-`PlaceOrder` numa arquitetura de microsserviços:
-
-1. `Order Service`: cria pedido em `PENDING`. Compensação: marcar como `CANCELLED`.
-2. `Customer Service`: reserva crédito do cliente. Compensação: liberar crédito.
-3. `Kitchen Service`: cria ticket. Compensação: cancelar ticket.
-4. `Order Service`: aprova pedido (`APPROVED`).
-
-Se o passo 3 falhar, executa-se a compensação do 2 e do 1.
+- **Atomicidade local** — cada `Tᵢ` é uma transação ACID no recurso dele.
+- **Idempotência** — retries são certos; chamar `Tᵢ` duas vezes deve produzir o mesmo efeito final.
+- **Compensação semântica** — `Cᵢ` reverte o efeito observável de `Tᵢ`. Se `Tᵢ` cobrou um cartão, `Cᵢ` estorna; não "desfaz" no sentido ACID.
+- **Compensações também idempotentes** — porque podem ser retentadas igualmente.
 
 ---
 
-## 2. O que **não é** SAGA (mas costuma ser chamado assim)
+## 2. Os dois modelos
 
-### 2.1 Job assíncrono com `failed()`
+A literatura descreve dois sabores de SAGA, distinguidos pelo **onde mora a lógica de coordenação**.
 
-Um job na fila com método `failed()` que muda um status **não é SAGA**. É **error handling**.
+### 2.1 Orquestração
 
-```php
-public function handle() { /* ... */ }
-public function failed() {
-    $this->domain->update(['status' => 'FAILED']);
-}
+Um **coordenador central** (workflow / orchestrator / saga manager) comanda cada passo: lê o resultado do passo anterior, decide o próximo, dispara compensação em caso de falha.
+
+```
+                ┌────────────────┐
+                │  Orchestrator  │
+                └────────┬───────┘
+            ┌────────────┼────────────┐
+            ▼            ▼            ▼
+        Service A    Service B    Service C
+         (T1/C1)      (T2/C2)      (T3/C3)
 ```
 
-Isso é uma transação local que falha e marca um campo. Não há sequência de passos coordenados, não há compensação semântica de outro recurso, não há orquestração.
+- **Lógica do fluxo**: centralizada no orchestrator.
+- **Cada serviço**: expõe step + compensação como operações; não conhece o fluxo todo.
+- **Exemplos de implementação**: Temporal Workflow, AWS Step Functions, lib custom com tabela `saga_state`.
 
-### 2.2 Encadear dois jobs
+**Quando tende a ser melhor**: pipelines lineares, equipe única, fluxo bem definido, necessidade de auditoria centralizada.
 
-`JobA` dispara `JobB` no final do `handle`. Isso é **pipeline assíncrono**, não SAGA. Vira saga só se: (a) houver coordenação de estado entre eles, (b) existir compensação se `JobB` falhar afetando o que `JobA` fez em outro recurso.
+### 2.2 Coreografia
 
-### 2.3 Transação de banco em um único serviço
+**Não há coordenador central**. Cada serviço escuta eventos e reage publicando o próximo evento. A "saga" é a soma das reações.
 
-`DB::transaction(fn() => ...)` em um único banco é ACID. SAGA existe **justamente porque** ACID não é viável atravessando recursos.
+```
+   OrderCreated ──► ServiceA ──► StockReserved
+                                       │
+                                       ▼
+                                  ServiceB ──► PaymentApproved
+                                                    │
+                                                    ▼
+                                               ServiceC ──► ShippingConfirmed
+```
 
-### 2.4 Webhook com retry
+- **Lógica do fluxo**: distribuída entre os serviços.
+- **Cada serviço**: dono do próprio step **e** da própria compensação; reage a eventos.
+- **Exemplos de implementação**: pub/sub em RabbitMQ/Kafka/EventBridge com lib mínima compartilhada para correlação e padrão de eventos.
 
-Receber webhook e re-tentar até funcionar é **at-least-once delivery** + idempotência. Saga só aparece se a falha definitiva precisar disparar compensações em recursos já modificados por passos anteriores.
+**Quando tende a ser melhor**: múltiplos times donos de serviços diferentes, evolução independente, baixo acoplamento desejado, fluxo event-driven natural.
 
-### 2.5 "1 pra 1" com compensação trivial
+### 2.3 Comparação direta
 
-Operação `A` que, se falhar, simplesmente desliga uma flag em `A` mesmo. Não há segundo recurso, não há sequência. Isso é só **rollback local** ou **state machine**.
+| Aspecto                     | Orquestração                                   | Coreografia                                      |
+| --------------------------- | ---------------------------------------------- | ------------------------------------------------ |
+| Lógica do fluxo             | Centralizada                                   | Distribuída                                      |
+| Acoplamento entre serviços  | Mais acoplado ao orquestrador                  | Mínimo (só formato de evento)                    |
+| Visibilidade do fluxo       | Alta (um lugar tem o "mapa")                   | Baixa (precisa rastrear eventos)                 |
+| Debug                       | Mais simples — timeline central                | Mais difícil — correlação por `saga_id`          |
+| Mudança no fluxo            | Edita orchestrator                             | Coordena entre múltiplos serviços                |
+| Resiliência a falha do coord. | Crítica (single point)                       | N/A — não há coordenador                         |
 
----
-
-## 3. Um caso prático: provisionamento multi-recurso
-
-Para tornar a discussão concreta, consideramos um cenário comum em plataformas SaaS: ativação de uma nova conta de cliente que envolve provisionamento em múltiplos recursos heterogêneos.
-
-### 3.1 Forma síncrona (anti-padrão)
-
-Fluxo disparado pelo front-end ao final de uma jornada de cadastro:
-
-1. Job assíncrono cria infra DNS e resolve um desafio ACME → status `CHALLENGE_CREATION_SUCCESS`.
-2. Job assíncrono completa o desafio, emite o certificado e armazena os arquivos em object storage → status `CERTIFICATE_ISSUANCE_SUCCESS`.
-3. **Front-end chama** um endpoint de "ativação" que:
-   - Localiza o registro com status `CERTIFICATE_ISSUANCE_SUCCESS`.
-   - Chama um serviço externo para habilitar uma feature flag no usuário (HTTP M2M).
-   - Chama o mesmo serviço externo para criar credenciais OAuth.
-   - Persiste localmente o `client_id` e o `client_secret` retornados.
-
-O ponto fraco: a etapa 3 depende da decisão do front em chamar o endpoint. Se o front não chamar (usuário fechou a aba, request perdido), a conta fica com certificado pronto mas sem credenciais OAuth e sem flag — estado inconsistente entre dois serviços.
-
-### 3.2 Forma migrada para fila
-
-Remover o endpoint síncrono e fazer a ativação acontecer **automaticamente** ao fim do passo de certificado, via fila. Ou seja:
-
-- O job de emissão de certificado termina com sucesso → dispara um próximo job (`ActivateAccount`) que executa o que estava no endpoint síncrono.
-- Se algum passo da ativação falhar, executa-se uma **compensação** que reverte o que já foi feito (revogar/excluir o OAuth client criado, desligar a flag, opcionalmente revogar o certificado).
-
-### 3.3 Isso é SAGA?
-
-**Tecnicamente, sim.** Aqui está o porquê:
-
-- Atravessa **dois recursos transacionais distintos** (banco local + serviço externo de identidade), cada um com seu próprio commit.
-- Não dá para colocar tudo numa transação ACID.
-- Cada passo é uma transação local com efeito observável fora do serviço (criar OAuth client é um "commit" remoto).
-- Existe a necessidade de compensação semântica: se o passo final falhar depois que o serviço externo já criou o OAuth client, esse client precisa ser excluído — caso contrário fica órfão.
-
-Mapeando para o vocabulário SAGA:
-
-| Passo | Recurso             | Ação local                                | Compensação                            |
-| ----- | ------------------- | ----------------------------------------- | -------------------------------------- |
-| `T₁`  | DNS / ACME          | criar hosted zone, registrar desafio      | excluir hosted zone / desafio          |
-| `T₂`  | Banco local + S3    | emitir certificado, salvar arquivos no S3 | revogar certificado, excluir do S3     |
-| `T₃`  | Serviço de identidade | habilitar feature flag                    | desabilitar a flag                     |
-| `T₄`  | Serviço de identidade | criar OAuth client                        | excluir OAuth client                   |
-| `T₅`  | Banco local         | persistir `client_id` e `client_secret`   | apagar esses campos                    |
-
-Se for orquestrada (um job coordenador chamando os passos) → **SAGA por orquestração**.
-Se cada job publicar evento e o próximo escutar → **SAGA por coreografia**.
-
-### 3.4 Quando o caso parece simples ("1 pra 1")
-
-É comum descrever uma saga deste porte como "1 pra 1": pipeline linear, sem ramificações, sem paralelismo, com cada passo tendo uma compensação direta. A definição rigorosa exige os pontos da seção 1, mas um caso minimalista (linear, poucos passos) ainda **cabe** dentro dela — não é uso indevido, é uso enxuto.
-
-### 3.5 O que NÃO seria SAGA nesse exemplo
-
-- Trocar o endpoint por um job que só atualiza status localmente. Sem cruzar fronteira de serviço, sem compensação multi-recurso, é só pipeline.
-- Confiar em retry infinito do serviço externo sem registrar estado de saga. Eventualmente "consistente" não é o mesmo que "sagado": SAGA exige que, ao desistir, o sistema **compense** o que já foi feito.
+A escolha **não precisa ser organizacional única**. Domínios diferentes podem usar modelos diferentes; forçar um padrão único costuma ser simplificação excessiva.
 
 ---
 
-## 4. Casos reais (e fortes) de SAGA na literatura
+## 3. Exemplo de referência das PoCs
 
-Para calibrar a expectativa do que SAGA "merece" existir:
+Para tornar a comparação entre ferramentas neutra e reproduzível, todas as PoCs implementam o **mesmo workflow de 3 passos**, ilustrativo de um checkout multi-serviço.
 
-1. **Reserva de viagem**: voo + hotel + carro, cada um em fornecedor diferente. Falha no carro → cancela voo e hotel.
-2. **E-commerce checkout**: criar pedido + reservar estoque + cobrar pagamento + agendar entrega. Falha na cobrança → libera estoque e cancela pedido.
-3. **Onboarding de cliente em banco**: KYC + abertura de conta + emissão de cartão + cadastro em sistema antifraude. Falha no antifraude → fecha conta, cancela cartão.
-4. **Pipeline de mídia**: upload → transcode → moderação → publicação. Falha na moderação → remove de CDN, apaga transcodes.
-5. **Provisionamento multi-cloud**: criar VPC AWS + criar projeto GCP + registrar DNS + emitir certificado. Falha no certificado → desfaz tudo.
+### 3.1 Os passos
 
-O exemplo de provisionamento descrito em §3 é parente do #5: provisionamento atravessando recursos heterogêneos. É menor em escala mas idêntico em natureza.
+| Passo | Serviço (hipotético)   | Ação local                               | Compensação                              |
+| ----- | ---------------------- | ---------------------------------------- | ---------------------------------------- |
+| `T₁`  | `acme/inventory`       | `ReserveStock` — reserva itens           | `ReleaseStock` — libera reserva          |
+| `T₂`  | `acme/payment-service` | `ChargeCredit` — cobra crédito           | `RefundCredit` — estorna cobrança        |
+| `T₃`  | `acme/order-service`   | `ConfirmShipping` — confirma envio       | `CancelShipping` — cancela envio         |
 
----
+### 3.2 O fluxo
 
-## 5. O que decidir antes de implementar
+```
+ReserveStock  →  ChargeCredit  →  ConfirmShipping  ✓ COMPLETED
+   ↓ falha       ↓ falha          ↓ falha
+ReleaseStock  ←  RefundCredit  ←  CancelShipping
+                                                    ✗ COMPENSATED
+```
 
-Independente do nome ("SAGA", "pipeline com compensação", "orquestração de ativação"), as decisões de design são as mesmas:
+### 3.3 Cenários executados em todas as PoCs
 
-### 5.1 Orquestração ou coreografia?
+1. **Happy path** — `T₁ → T₂ → T₃` completam; saga `COMPLETED`.
+2. **Falha em `T₂`** — executa `C₁` (`ReleaseStock`); saga `COMPENSATED`.
+3. **Falha em `T₃`** — executa `C₂` (`RefundCredit`), depois `C₁` (`ReleaseStock`); saga `COMPENSATED`.
 
-Os dois sabores não são intercambiáveis. Critérios práticos para escolher:
+Falhas são injetadas via `FORCE_FAIL=step2|step3` para garantir reprodutibilidade.
 
-| Critério                                                                | Tende para                                                                          |
-| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Pipeline linear curto (≤5 passos), single-team, fluxo bem definido      | **Orquestração** — único lugar tem o "mapa" da saga, debug simples                  |
-| Múltiplos times donos de serviços diferentes, evolução independente     | **Coreografia** — acoplamento mínimo, cada serviço só conhece os eventos que assina |
-| Estado complexo (timeouts, retries por step, dependências entre passos) | **Orquestração** — coordenação central simplifica raciocínio                        |
-| Fluxo chatty event-driven, vários serviços reagindo em paralelo         | **Coreografia** — pub/sub é o modelo natural                                        |
-| Auditoria/compliance exige timeline central da saga                     | **Orquestração** — observabilidade out-of-the-box                                   |
-| Compensação por step é local e idempotente por construção               | **Coreografia** — cada serviço dono da sua compensação                              |
+### 3.4 Por que esse exemplo é representativo
 
-A escolha **não é binária organizacional** — em uma plataforma com vários domínios, casos diferentes podem usar padrões diferentes. Forçar um padrão único para todos os casos costuma ser simplificação excessiva.
+- Atravessa **três recursos transacionais distintos** (inventory DB, payment provider, order DB).
+- Cada passo tem **compensação semântica clara** (não é rollback ACID).
+- É **linear, curto e idempotente** — porte mínimo viável que ainda exercita LIFO completo.
+- Cabe sem distorções nos quatro modelos avaliados (orquestração com state machine custom, durable execution engine, state machine managed, coreografia event-driven).
 
-### 5.2 Onde mora o estado da saga?
-
-Há dois extremos. Em uma ponta, o estado vive distribuído nos próprios registros de domínio (um campo `status` por entidade), o que costuma bastar para sagas pequenas e lineares. Na outra ponta, cria-se uma tabela `saga_state` com `(saga_id, current_step, completed_steps[], context_payload, status)` para permitir retomar de onde parou e saber o que compensar — abordagem necessária quando o número de instâncias em vôo é alto ou quando há ramificações. Não há resposta universal: a complexidade da saga determina o nível de instrumentação que vale a pena pagar.
-
-### 5.3 Quais passos são realmente compensáveis?
-
-- Recurso reversível via API (criar/excluir, habilitar/desabilitar) → ✅ compensável.
-- Operação que afeta outros consumidores (desligar uma flag pode quebrar outra funcionalidade) → ⚠️ revisar regra de negócio antes de assumir compensação.
-- Operação custosa de reverter mas inofensiva se mantida (ex.: certificado emitido) → ⚠️ aceitar como não-compensável e documentar.
-- Side-effects irreversíveis (e-mail enviado, cobrança realizada) → exigem compensação semântica diferente (e-mail de correção, estorno).
-
-Quando um passo é "irreversível na prática", a saga aceita isso e a compensação se limita aos recursos que importam. **Não é falha de design, é decisão consciente.**
-
-### 5.4 Idempotência
-
-Cada passo precisa ser idempotente, porque retry é certeza. Uma chamada `OAuthClient::create` chamada duas vezes deveria retornar o client existente, não criar dois. Operações que hoje sempre criam um novo registro precisam ganhar idempotency key antes de entrar em uma saga.
-
-### 5.5 Observabilidade
-
-Saga sem observabilidade vira pesadelo. Em qualquer implementação:
-
-- Log estruturado por `saga_id` em cada passo e cada compensação.
-- Métrica de "sagas em andamento", "sagas compensadas", "sagas falhadas sem compensação".
-- Alerta quando uma compensação falha (cenário onde fica realmente inconsistente).
+Não é o caso "mais robusto possível" de SAGA; é o caso minimalista que exercita as propriedades essenciais e permite comparação ferramenta-a-ferramenta sem o ruído de domínio específico.
 
 ---
 
-## 6. Resumo executivo
+## 4. Quando NÃO usar SAGA
 
-- **SAGA clássica** = sequência de transações locais multi-recurso com compensações reversas. Existe para resolver long-lived transactions onde ACID distribuído não cabe.
-- **O que NÃO é SAGA**: job com `failed()`, pipeline assíncrono trivial, retry de webhook, transação de banco único.
-- Casos minimalistas (pipeline linear curto com compensação direta) ainda **cabem na definição clássica** — são sagas pequenas, por orquestração ou coreografia, no modelo "1 pra 1".
-- Os PoCs deste estudo usam um workflow genérico de 3 passos (`ReserveStock` → `ChargeCredit` → `ConfirmShipping`) para ilustrar o mecanismo de forma neutra e comparável entre as ferramentas avaliadas.
-- **Antes de implementar**, definir: orquestração vs coreografia, onde mora o estado da saga, quais passos são compensáveis na prática, idempotência de cada passo, e observabilidade.
+Esses casos costumam ser confundidos com saga, e a confusão leva a sobre-engenharia.
+
+### 4.1 Job assíncrono com `failed()`
+
+Um job que cai em `failed()` e marca um status local **não é SAGA** — é error handling. Não há sequência de passos coordenados, não há compensação semântica em outro recurso.
+
+### 4.2 Encadear dois jobs
+
+`JobA` dispara `JobB` no final do `handle`. Isso é **pipeline assíncrono**. Vira saga apenas se houver coordenação de estado e compensação caso `JobB` falhe afetando o que `JobA` fez em outro recurso.
+
+### 4.3 Transação de banco em um único serviço
+
+`DB::transaction(fn() => …)` em um banco só é ACID. SAGA existe **justamente porque** ACID não cobre múltiplos recursos.
+
+### 4.4 Webhook com retry
+
+Receber webhook e retentar até funcionar é **at-least-once delivery + idempotência**. Saga só aparece quando a falha definitiva dispara compensação em recursos já modificados.
+
+### 4.5 Compensação trivial em recurso único
+
+Operação que, se falhar, só desliga uma flag no próprio recurso é **rollback local** ou **state machine** — não saga.
+
+### 4.6 Side-effects irreversíveis sem necessidade real de compensação
+
+Se "compensar" o passo é impraticável (e-mail enviado, cobrança liquidada e contabilizada, item físico despachado), e o negócio aceita que o efeito persista, o passo é tratado como não-compensável e a saga não precisa existir só por causa dele. Documentar a aceitação é parte do desenho.
+
+---
+
+## 5. Decisões transversais antes de implementar
+
+Independente do nome dado ao padrão e da plataforma escolhida, as decisões abaixo são as mesmas e precisam ser explicitadas:
+
+- **Orquestração vs coreografia** — usar o critério de §2.3, caso a caso.
+- **Onde mora o estado da saga** — em campos de status nos próprios registros de domínio, ou em tabela `saga_state` dedicada com `(saga_id, current_step, completed_steps[], context_payload, status)`. Sagas pequenas e lineares costumam viver bem com a primeira; sagas com ramificação ou alto volume em vôo precisam da segunda.
+- **Idempotência por passo** — cada `Tᵢ` e cada `Cᵢ` precisa ser idempotente. Operações que hoje sempre criam um novo registro precisam de `idempotency_key` antes de entrar em saga.
+- **Quais passos são realmente compensáveis** — recursos com API reversível são compensáveis; operações que afetam outros consumidores exigem revisão de regra de negócio; side-effects irreversíveis são documentados como tal.
+- **Observabilidade mínima** — log estruturado por `saga_id`, métrica de sagas em vôo / compensadas / falhadas-sem-compensação, alerta quando uma compensação falha (esse é o cenário onde o sistema fica de fato inconsistente).
+
+---
+
+## 6. Resumo
+
+- **SAGA** = sequência de transações locais multi-recurso com compensações reversas (LIFO). Resolve long-lived transactions onde ACID distribuído não cabe.
+- **Orquestração** = coordenador central; **coreografia** = serviços reagindo a eventos. Escolha por critério, não por dogma.
+- **Não é SAGA**: job com `failed()`, pipeline assíncrono trivial, retry de webhook, transação ACID local.
+- As PoCs deste estudo usam um workflow neutro de 3 passos (`ReserveStock → ChargeCredit → ConfirmShipping`) para comparar plataformas de forma reproduzível.
+- Antes de implementar, definir explicitamente: modelo, localização do estado, idempotência, compensabilidade de cada passo e observabilidade.

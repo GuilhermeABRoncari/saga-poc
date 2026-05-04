@@ -16,6 +16,7 @@
 | **Workflow / Saga definition**     | Especificação ordenada dos steps + suas compensações + regras de retry/timeout. Em Temporal é PHP code; em RabbitMQ é classe `Saga` com `definition()`; em Step Functions é JSON ASL.                                                             | Todos os documentos.                            |
 | **Orchestrator / Workflow worker** | Processo central que coordena o fluxo da saga: lê eventos de conclusão de step, decide o próximo, dispara compensação em falha.                                                                                                                   | `findings-rabbitmq.md`, `findings-temporal.md`. |
 | **Service worker**                 | Processo que executa o handler concreto de um step (ex.: o código que de fato chama um endpoint HTTP `reserve-stock`).                                                                                                                            | Todos os PoCs.                                  |
+| **Saga Aggregator**                | Em uma saga coreografada, componente (geralmente um serviço ou consumer dedicado) que **observa eventos** de todos os passos e reconstrói uma visão consolidada por `saga_id` para fins de auditoria/observabilidade. Não coordena o fluxo — apenas agrega. | `findings-rabbitmq-coreografado.md`, `consideracoes.md`. |
 
 ---
 
@@ -34,6 +35,7 @@
 | **PSR**            | **PHP Standards Recommendations** — conjunto de padrões mantidos pelo PHP-FIG (autoload, logging, HTTP, etc).                                                        | Mencionado eventualmente.                   |
 | **Composer**       | Gerenciador de dependências do PHP.                                                                                                                                  | Build dos PoCs.                             |
 | **PHPStan**        | Static analyzer para PHP. Usado para lint customizado proibindo `date()`, `rand()`, `PDO` em workflow code.                                                          | `consideracoes.md`.                         |
+| **Khepri**         | Backend de metadados nativo do RabbitMQ (substitui Mnesia a partir do RabbitMQ 4.x). Usa Raft para replicação de configuração de cluster, exchanges e bindings.       | `findings-rabbitmq.md`, `consideracoes.md`. |
 
 ---
 
@@ -42,6 +44,7 @@
 | Termo                       | Significado                                                                                                                                                                                                | Onde aparece                                            |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | **Queue**                   | Estrutura FIFO (com prioridade opcional) onde mensagens aguardam processamento.                                                                                                                            | `findings-rabbitmq.md`.                                 |
+| **Quorum Queue**            | Tipo de fila do RabbitMQ baseado em consenso Raft, replicada entre nodes do cluster. **Obrigatória a partir do RabbitMQ 4.0** (mirrored queues foram removidas). Recomendada para HA real.                  | `findings-rabbitmq.md`, `consideracoes.md`.             |
 | **Exchange**                | Em AMQP, ponto de entrada que roteia mensagens para queues conforme bindings (direct, topic, fanout, headers).                                                                                             | `findings-rabbitmq.md`.                                 |
 | **Binding**                 | Regra que conecta exchange a queue.                                                                                                                                                                        | `findings-rabbitmq.md`.                                 |
 | **DLX / DLQ**               | **Dead Letter Exchange / Dead Letter Queue** — destino para mensagens que esgotaram retries ou foram NACKed. Permite alerting e investigação.                                                              | `findings-rabbitmq.md`, `consideracoes.md`.             |
@@ -56,6 +59,7 @@
 | **Idempotency key**         | Chave derivada de `saga_id + step_name` armazenada para evitar processamento duplicado de mesma operação.                                                                                                  | `consideracoes.md` §1.2.2.                              |
 | **Outbox pattern**          | Padrão onde escrita de DB e publicação de mensagem ficam numa única transação local; um worker separado faz o fan-out. Resolve at-least-once em sistemas com DB próprio.                                   | `consideracoes.md` §1.2.1.                              |
 | **Saga "órfã"**             | Saga em estado `RUNNING` que ficou parada porque o orchestrator morreu permanentemente sem retomada.                                                                                                       | `findings-rabbitmq.md` §6.4.                            |
+| **Coreografia / Orquestração** | Os dois modelos clássicos de SAGA. Orquestração = coordenador central comanda os passos; coreografia = serviços reagem a eventos sem coordenador. Ver `compreensao-saga.md` §2.                          | `compreensao-saga.md`, `findings-rabbitmq-coreografado.md`. |
 
 ---
 
@@ -67,12 +71,13 @@
 | **DX**                  | **Developer Experience** — qualidade subjetiva de trabalhar com a tecnologia (legibilidade, ferramental, mensagens de erro).    | `consideracoes.md`, findings. |
 | **p50 / p95 / p99**     | Percentis de latência. p50 = mediana; p99 = só 1% das requests demoraram mais que esse valor.                                   | T6.2, `findings-*.md`.        |
 | **SLO**                 | **Service Level Objective** — meta de qualidade do serviço (ex.: "p99 < 100ms").                                                | T4.4, `consideracoes.md`.     |
-| **TCO**                 | **Total Cost of Ownership** — custo total de adoção considerando infra + eng + operação ao longo do tempo.                      | `recomendacao-saga.md`.       |
+| **TCO**                 | **Total Cost of Ownership** — custo total de adoção considerando infra, engenharia, operação e migração ao longo do tempo. Usado para comparar opções self-hosted vs managed em horizonte de 1-3 anos. | `recomendacao-saga.md`, `consideracoes.md`. |
 | **Bus factor**          | Quantas pessoas precisam sair antes do conhecimento se perder. Bus factor=1 é precário.                                         | `consideracoes.md` §1.2.6.    |
 | **Postmortem**          | Análise depois de incidente. Aqui especificamente: capacidade de reconstruir o que aconteceu numa saga arbitrária.              | T3.4, `consideracoes.md`.     |
 | **Silent corruption**   | Erro que produz dado inconsistente sem alerta ou exception — pior tipo de bug.                                                  | T5.1, `consideracoes.md` §5.  |
 | **Observabilidade**     | Capacidade de inspecionar o sistema em runtime (logs, métricas, traces, timelines).                                             | Todos os findings.            |
 | **Postmortem-friendly** | Capacidade de uma plataforma de facilitar investigação de incidentes (history rico, payloads preservados, replay programático). | T3.4.                         |
+| **Multi-Valued Indexes**| Recurso de bancos (Postgres `GIN`, MySQL 8 `multi-valued index`) que permite indexar arrays/JSON dentro de uma única linha. Relevante para colunas como `completed_steps[]` em `saga_state`, evitando tabelas auxiliares de junção. | `consideracoes.md`.           |
 
 ---
 

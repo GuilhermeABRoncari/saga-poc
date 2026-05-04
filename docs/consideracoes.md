@@ -1,582 +1,96 @@
-# Considerações: prós e contras detalhados por abordagem
+# Considerações: análise cross-tool de SAGA
 
-> Documento analítico para alimentar a recomendação registrada em [`recomendacao-saga.md`](./recomendacao-saga.md). Complementa o comparativo de alto nível em [`estudo.md`](./estudo.md) e as medições concretas em [`findings-rabbitmq.md`](./findings-rabbitmq.md). É deliberadamente balanceado — cada ferramenta tem custo real e benefício real, e a recomendação só fechou após findings simétricos do PoC Temporal.
->
-> **Atualizado após as baterias Tier 1 a Tier 6** (ver [`checklist-testes.md`](./checklist-testes.md)). Mudanças relevantes:
->
-> - **§1.1.7 NOVO** com medições de throughput, footprint e cold start (T1.3 + T3.2 + T3.3).
-> - **§1.2.2 (at-least-once)** rebaixado de "certeza sem idempotência" para "risco condicional" — T1.2 não reproduziu duplicação na janela testada.
-> - **§1.2.3 e §1.2.4 (sem timeline / sem replay)** reforçados com medição empírica em T3.4 — postmortem em RabbitMQ leva 2-15 min e não tem payloads de entrada; em Temporal leva 30s-1min com history completo.
-> - **§1.2.10 NOVO** sobre reconexão de workers — T1.4 mostrou que a PoC atual não reconecta workers quando broker cai; lacuna real da lib.
-> - **§1.2.11 NOVO** sobre orchestrator marcando COMPENSATED antes da compensação completar — T2.3 mostrou que DB mente sobre estado real.
-> - **§1.2.8 (versionamento implícito)** confirmado empiricamente em T1.1 — saga em voo completou silenciosamente com definição antiga.
-> - **§2.1.4 (observabilidade)** reforçado com T3.4 — Temporal entrega payloads completos consultáveis sem o dev ter previsto consulta; RabbitMQ não.
-> - **§2.1.5 (versionamento explícito)** confirmado em T1.5 — Temporal panic + getVersion como mitigação correta.
-> - **§3 (cruzamento)** atualizado com medições de throughput, memória, tempo de detecção de falha, profundidade de postmortem e cold start.
-> - **§4 NOVO** sobre alertas — implementação concreta do T2.2 enfraqueceu o argumento "Temporal entrega alertas grátis"; o que se mantém é "Temporal classifica `Failed` automaticamente para qualquer caminho de falha".
-> - **§5 NOVO** sobre custo de "memória de longo prazo" — T3.3 mostrou que Temporal acumula state durável em Postgres (~+311 MB sob 5 min de load) enquanto RabbitMQ é "transport ephemeral" (volta ao baseline). Não é leak — é o preço da observabilidade.
-> - **§2.2.6 em `findings-temporal.md` (revisado)** — Temporal não suporta MariaDB. Cenários onde o SGBD principal já é MariaDB exigem um SGBD adicional (preferencialmente **MySQL 8** via RDS/Aurora — Temporal suporta oficialmente e o time mantém familiaridade quase total). Custo revisado: ~3 dias eng inicial + ~$30-150/mês. Critério a mais na decisão, não bloqueador isolado.
-> - **§1.2.13 NOVO** sobre falta de health-check de storage — T4.2 mostrou que a lib RabbitMQ trata SQLite indisponível com falha silenciosa.
-> - **§1.2.14 NOVO** sobre falta de conceito de timeout — T4.4 mostrou que handler travado em RabbitMQ bloqueia consumer indefinidamente; Temporal classifica 4 tipos de timeout distintos.
-> - **§2.1.2 (durable execution)** reforçado com T4.1 — worker Temporal sobreviveu a 10s de network outage com 0 retries.
-> - **§2.1.X NOVO** sobre classificação rica de falhas — T4.4 mostrou Temporal distinguindo `ActivityTaskTimedOut` (4 tipos) de `ActivityTaskFailed`.
-> - **§1.2.8 (mudança de shape)** elevado a achado crítico: T5.1 reproduziu **silent corruption** real em RabbitMQ (saga `9b1213c2`: reserveStock executou 2x, chargeCredit nunca rodou, saga marcada COMPLETED). T5.1 é provavelmente o argumento mais forte do estudo a favor do Temporal no eixo "correção sob mudança de código".
-> - **T5.2 (shape de payload)** mostrou empate prático — ambos compensam corretamente quando handler rejeita payload. Diferença marginal apenas em retry behavior.
-> - **§1.1.7 (throughput) reforçado em T6.2** — RabbitMQ p99=22ms vs Temporal p99=351ms (~16x). Vantagem clara em latência e previsibilidade.
-> - **§1.2.15 NOVO (deadlock SQLite sob concorrência)** — T6.2 revelou que a lib RabbitMQ não tinha proteção contra "database is locked"; corrigido com 2 LOC (`PRAGMA busy_timeout` + `journal_mode=WAL`), mas é evidência de "classe de bug que ninguém testou".
-> - **§6 NOVO (custo Temporal Cloud em escala)** — T6.1 estimou ~$4800/mês (~$58k/ano) para volume agregado dos serviços avaliados; self-host é a opção financeiramente sensata em escala >10M actions/mês.
+> Documento de narrativa **cross-tool** — temas que cruzam as ferramentas avaliadas (RabbitMQ, Temporal, Step Functions) e merecem doc único. Complementa [`recomendacao-saga.md`](./recomendacao-saga.md), [`estudo.md`](./estudo.md) e os findings específicos de cada ferramenta.
+
+## §0 Sumário — o que vive aqui
+
+Este arquivo concentra análise transversal: comparação direta entre ferramentas, DX em code review, observabilidade, custos em escala, riscos de longo prazo. **Detalhes de prós/contras por ferramenta vivem nos findings:**
+
+- [`findings-rabbitmq.md`](./findings-rabbitmq.md) — comportamento, gaps e medições do RabbitMQ + lib interna (orquestrado).
+- [`findings-rabbitmq-coreografado.md`](./findings-rabbitmq-coreografado.md) — variante coreografada da PoC RabbitMQ.
+- [`findings-temporal.md`](./findings-temporal.md) — comportamento, gaps e medições do Temporal.
+- [`findings-step-functions.md`](./findings-step-functions.md) — comportamento, gaps e medições do AWS Step Functions.
+
+Capítulos a seguir: §1 cruzamento ferramenta-a-ferramenta; §2 DX em code review; §3 alertas/observabilidade; §4 silent corruption sob mudança de código; §5 custo de "memória de longo prazo"; §6 custo financeiro em Cloud em escala; §7 plano técnico de Saga Aggregator; §8 TCO em 3 cenários; §9 ângulo que pode mudar tudo.
 
 ---
 
-## 1. RabbitMQ + biblioteca interna de saga
+## §1 Cruzamento: o que cada ferramenta faz melhor
 
-### 1.1 Prós
-
-#### 1.1.1 Continuidade com a stack existente
-
-- Time já domina filas, AMQP, padrão de consumer/producer, Laravel queues.
-- Sem runtime novo (sem RoadRunner, sem segundo modelo de execução).
-- Sem `yield`, sem determinismo, sem versionamento de workflow — o código é PHP comum.
-- Code review entra na rotina existente; reviewer não precisa aprender API nova.
-
-#### 1.1.2 Controle total de API e ergonomia
-
-- O time desenha o pacote. Convenções de logging, naming, configuração, integração com bibliotecas de resiliência, integração com Sentry — todas internas.
-- Customizações específicas do negócio (ex.: integração nativa com APIs HTTP M2M, headers `User-Agent` próprios, telemetria interna) são triviais.
-
-#### 1.1.3 Sem lock-in
-
-- AMQP é padrão aberto (RabbitMQ, ActiveMQ, AWS MQ).
-- Self-hosted, controle total de operação.
-- Migrar para outra implementação AMQP é re-deploy, não rewrite.
-
-#### 1.1.4 Convive bem com infra híbrida
-
-- Roda em Swarm hoje, em qualquer outro orquestrador amanhã sem mudança de código.
-- Uma única clusterização (RabbitMQ) atende todos os apps, mesmo apps em substratos diferentes.
-
-#### 1.1.5 Durable transport entrega muito sem código próprio
-
-Validado em [`findings-rabbitmq.md`](./findings-rabbitmq.md) §6:
-
-- **Cenário A (kill service-a mid-handler):** RabbitMQ requeue + retomada automática.
-- **Cenário B (kill orchestrator com evento em voo):** queue durável absorve mensagens; quando orchestrator volta, consome o backlog.
-
-Manual ack + queue durable + estado em SQLite **já entregam grande parte** do que se espera de "durable execution". Não é necessário escrever toda essa lógica.
-
-#### 1.1.6 RabbitMQ é maduro e battle-tested
-
-- 18+ anos de produção em larga escala.
-- Comportamento previsível, documentação extensa, troubleshooting bem documentado.
-- Bug residual no broker é raro e geralmente já tem ticket público.
-
-#### 1.1.7 Throughput e footprint enxutos (NOVO — T1.3 + T3.2 + T3.3)
-
-Validado empiricamente em testes T1.3 (burst), T3.2 (idle) e T3.3 (sustained):
-
-- **Throughput burst (100 sagas concorrentes):** RabbitMQ **~142 sagas/s** (4.3 + Khepri) vs Temporal ~28 sagas/s — **~5x mais rápido**. Em 3.13 era ~48 sagas/s (~1.7x).
-- **Throughput sustentado (5 min × 10/s):** ambos ~9.5-9.86 sagas/s; 0 falhas em 2847-2959 sagas.
-- **Latência fim-a-fim (T6.2 — 1000 sagas sequenciais):** RabbitMQ 4.3 p50=21.8ms / p99=23.8ms (max 42.2ms) vs Temporal p50=60ms / p99=351ms (distribuição bimodal, ~15x mais lento em p99). RabbitMQ ~6.2x mais throughput sequencial. _Re-medido em 2026-05-04 contra 4.3 + Khepri; números praticamente idênticos a 3.13 (p50=21ms / p99=22ms) — Khepri não alterou latência sequencial; ganho do 4.3 está em burst (T1.3) e footprint (T3.2)._
-- **RAM idle por stack:** RabbitMQ **~137 MiB** (4.3) vs Temporal **~439 MB** — **~3.2x mais leve**. Em 3.13 era ~170 MB (~2.6x).
-- **Tamanho das imagens Docker:** RabbitMQ **~665 MB** total vs Temporal **~3800 MB** total — **~6x menor** (PECL grpc + RoadRunner pesam).
-- **Cold start cacheado:** RabbitMQ **~10s** até saga rodar vs Temporal **~30s** (afetado pela race condition documentada em [`findings-temporal.md`](./findings-temporal.md) §1 bug 3).
-- **Cold start sem cache (estimado):** RabbitMQ **~2-3 min** vs Temporal **~25 min** (PECL grpc compile domina).
-- **Latência de detecção de falha (alerter):** RabbitMQ **~1s** vs Temporal ~7s.
-- **Memória sob load sustentado:** RabbitMQ volta ao baseline depois do load; Temporal acumula +300 MB no Postgres (history retention — não é leak, é storage de audit trail).
-
-Para o volume esperado (<100 sagas/min agregadas), **ambos são adequados** em throughput. A folga operacional do RabbitMQ é maior em RAM, disco e cold start. Em cenários de pico não-previstos, RabbitMQ tem mais headroom; em cenários de devs com 4GB de RAM (CI runners, máquinas modestas), Temporal pode forçar tuning.
-
----
-
-### 1.2 Contras
-
-#### 1.2.1 Tudo o que não é transport, você constrói
-
-- State machine de saga (idempotência por step, sequenciamento, recuperação).
-- Tabela `saga_state` + repositório.
-- Outbox transacional (escrita atômica DB + publish).
-- DLX handler + alerting.
-- Lógica de retry com backoff exponencial.
-- Mecanismo de resume on boot (varrer sagas RUNNING e republicar comandos).
-- Observabilidade: dashboard "sagas em andamento / compensadas / órfãs".
-- Estimativa em [`findings-rabbitmq.md`](./findings-rabbitmq.md) §4: **3-5 dias engenheiro** só para chegar ao "mínimo aceitável" de observabilidade.
-
-#### 1.2.2 At-least-once obriga idempotência por construção (revisado em T1.2)
-
-Identificado teoricamente no [Cenário C](./findings-rabbitmq.md#63-cenário-c-at-least-once--execução-dupla-gap-identificado-não-testado) do PoC: se o orchestrator morre **entre** atualizar SQLite e publicar o próximo comando (ou entre publicar e ackar a msg que está sendo consumida), no restart a msg é redelivered e o comando republicado → handler executa duas vezes.
-
-**T1.2 tentou reproduzir empiricamente e NÃO conseguiu na janela testada.** Hipótese: heartbeat AMQP padrão (60s) + restart rápido fazem com que RabbitMQ não tenha tempo de detectar conexão morta e reentregar a mensagem antes do novo orchestrator subir. A mensagem fica em "delivered to dead consumer" até o broker timeout.
-
-Status atualizado: **risco condicional** dependendo do timing AMQP, não certeza. Em produção pode acontecer com `consumer_timeout`/`heartbeat` configurados de forma diferente, e a janela exata depende de:
-
-- Configuração de heartbeat do broker.
-- Velocidade de detecção de conexão morta.
-- Velocidade de restart do orchestrator (se < heartbeat: provável evitar; se > heartbeat: provável reproduzir).
-
-Implicações reais em produção, **caso aconteça**:
-
-- `chargeCredit` cobrado duas vezes do cliente.
-- `reserveStock` reservando estoque em duplicidade.
-- Recursos de identidade (ex.: OAuth client) criados em duplicidade.
-
-A mitigação **continua sendo disciplina**: cada handler precisa checar antes de agir (idempotency_key, dedup table, unique constraints). Nunca é default da plataforma — é responsabilidade permanente do dev. **Em Temporal essa classe de bug é estruturalmente reduzida** (não eliminada) porque o engine garante exactly-once de activity execution na vasta maioria dos cenários via event sourcing — janela de risco fica em milissegundos entre completar activity e enviar resultado ao server, vs janela de segundos no RabbitMQ.
-
-#### 1.2.3 Sem timeline visual nativa (reforçado em T3.4)
-
-- RabbitMQ Management UI mostra filas, mensagens, throughput — mas **não** mostra "saga X passou pelos steps Y, Z, W".
-- Para saber o que aconteceu numa saga específica, é preciso correlacionar logs de N containers pelo `saga_id` manualmente, ou construir UI custom.
-- Postmortem vira arqueologia em log + query SQL na `saga_state`.
-
-**Confirmação T3.4:** reconstruir o passo-a-passo de uma saga COMPLETED levou 2-5 minutos no melhor caso (saga simples). O Temporal Web UI faz o mesmo em 30s-1min com timeline visual e payloads expandidos.
-
-#### 1.2.4 Sem replay de execução passada (reforçado em T3.4)
-
-- Logs efêmeros (ou em ELK, depende do investimento).
-- Estado SQLite só guarda o **snapshot atual**, não o histórico completo.
-- Para "ver exatamente o que aconteceu na saga 1234 ontem às 14h", é preciso juntar logs de N serviços.
-- Exigiria adicionar tabela `saga_events` append-only para ter algo equivalente — **1-2 dias de engenharia** ([`findings-rabbitmq.md`](./findings-rabbitmq.md) §4).
-
-**Confirmação T3.4:** o gap real medido vai além de "sem timeline visual" — é que **payloads de entrada de cada step não são persistidos**. A lib guarda só o `result` retornado, não o payload com que o handler foi chamado. Para um postmortem do tipo "por que `chargeCredit` recebeu valor errado?" o dev precisa correlacionar logs de N services. Em Temporal, cada `ActivityTaskScheduled` tem `Input:[...]` no history.
-
-Para chegar à paridade, RabbitMQ precisaria:
-
-- Tabela `saga_events` append-only com input + output de cada step (~1-2 dias eng).
-- Integração com ELK/Loki para correlacionar logs cross-service (~2-3 dias).
-- UI custom para navegar o history (ou views Grafana — mais 1-2 dias).
-- Lifecycle policy para purgar dados antigos (~0.5 dia).
-- **Custo cumulativo: ~5-7 dias de eng** + manutenção recorrente.
-
-#### 1.2.5 Saga "órfã" sem mecanismo de resume
-
-- Se orchestrator morre permanentemente (deploy quebrado, container OOM cíclico), sagas em estado `RUNNING` ficam paradas indefinidamente.
-- A lib **não consulta** `sagas WHERE status='RUNNING'` no boot.
-- Mensagens podem estar em filas (recuperáveis) ou já terem sido processadas/ackadas (perdidas).
-- **Estimativa para fechar o gap:** 1-2 dias de engenharia + testes.
-
-#### 1.2.6 Bus factor da lib interna
-
-- Quem escreve a lib é a mesma pessoa/time que mantém. Se sai, conhecimento sai junto.
-- Roadmap é ad-hoc; sem garantia de manutenção contínua.
-- Documentação precisa ser construída e mantida do zero.
-- Casos extremos (concorrência, race conditions sutis, edge cases de retry) precisam ser descobertos sozinhos — cada um custa engenharia.
-
-#### 1.2.7 "Padronização real" depende de disciplina permanente
-
-- A lib só funciona como padrão organizacional se TODOS os times a usarem corretamente.
-- Cada app vai querer divergir em algo: "no nosso caso é diferente porque...". Cada divergência erode o padrão.
-- Sem governança ativa (code review centralizado, lint customizado, ADR atualizada), em 12-18 meses cada app tem sua própria versão "modificada" da lib.
-
-#### 1.2.8 Mudança de shape de saga é problema implícito (CONFIRMADO CRÍTICO em T1.1 + T5.1)
-
-- Se hoje `completed_steps[].step_index` é um inteiro `[0,1,2]`, e amanhã insere-se um step novo na posição 1, sagas em voo apontam para step errado.
-- A solução existe, mas vira responsabilidade da lib OU do dev: migração de dados, status enums versionados, lógica condicional no orchestrator ("se saga começou antes da migração X, siga caminho velho").
-- O problema **não desaparece em RabbitMQ** — é apenas implícito (e por isso mais perigoso, porque é fácil esquecer).
-
-**Confirmação empírica T5.1 — provavelmente o achado mais sério do estudo:**
-
-Cenário: saga em voo (reserveStock dormindo 15s); orchestrator restartado mid-flight com `definition()` reordenada (chargeCredit antes de reserveStock).
-
-Resultado real medido na saga `9b1213c2`:
-
-```
-status: COMPLETED  ← (mentira: saga marcada como sucesso)
-completed_steps:
-  [{"index":0, "name":"charge_credit", "result":{"reservation_id":"res_73461e96"}},  ← name e result não batem
-   {"index":1, "name":"reserve_stock", "result":{"reservation_id":"res_fa3b08dd"}}, ← reserveStock executou DE NOVO
-   {"index":2, "name":"confirm_shipping", "result":{"tracking_code":"BR387995"}}]
-```
-
-Em produção, isso significaria:
-
-- Estoque reservado **2 vezes** (`res_73461e96` + `res_fa3b08dd`).
-- Pagamento (`chargeCredit`) **nunca executado** — o slot foi "consumido" pelo result residual de reserveStock.
-- Pedido marcado como `COMPLETED` no DB.
-- Cliente vê pedido confirmado, recebe item duas vezes do estoque, **não pagou nada**.
-
-**Sem qualquer alerta, log de erro, exception ou sinal externo.** A lib não tem como detectar essa inconsistência — `status='COMPLETED'` é o que aparece no dashboard.
-
-Em Temporal o cenário equivalente (T5.1) gerou panic explícito com mensagem detalhada (`history event is ServiceA.reserveStock, replay command is ServiceB.chargeCredit`), workflow stuck em retry até intervenção humana. Estado preservado, postmortem trivial.
-
-Mitigação no RabbitMQ exige `saga_version` + lógica condicional + lint customizado, mas **mesmo assim depende do dev lembrar de bumpar a versão a cada mudança**. Esquecimento humano = corrupção em produção. Para múltiplos serviços e times durante anos, esse risco é cumulativo.
-
-Este é o achado mais cético sobre RabbitMQ-PoC.
-
-#### 1.2.9 Operação em produção
-
-- Clustering em Swarm é doloroso (hostname pinning, volume constraints, peer discovery via classic config).
-- RabbitMQ 4.x exige Quorum Queues para HA — Classic Mirrored foram removidas.
-- Mínimo 3 nodes para tolerância a falhas reais.
-- Recursos: 4GB RAM + 4 cores por node em produção (estimativa).
-- Monitoring: Prometheus + Grafana + alertas custom.
-
-#### 1.2.10 Workers da PoC não reconectam quando broker cai (NOVO — T1.4)
-
-Validado empiricamente em **T1.4**: ao matar o broker RabbitMQ enquanto sagas estão em voo, **todos os workers (`orchestrator`, `service-a`, `service-b`) caem com `AMQPProtocolConnectionException`** e ficam em status `Exited (255)` indefinidamente. Quando o broker volta, **não há reconexão automática** — a stack inteira fica down até intervenção manual (`docker compose up -d`).
-
-Implicações:
-
-- Em ambiente de produção com cluster RabbitMQ + quorum queues, derrubadas planejadas (rolling restart, upgrade) ou não-planejadas (split brain, deploy quebrado) param TODA a coordenação de sagas até alguém subir os workers manualmente.
-- Sagas em voo ficam stuck — mensagens permanecem em queue durable, mas sem consumer não há progresso.
-- Em Temporal o equivalente foi testado (T1.4 análogo): workers sobreviveram a 30s de Postgres caído e retomaram automaticamente quando voltou.
-
-**Mitigação:** envolver `consume()` em try/catch + loop de reconexão com backoff exponencial. Custo: ~0.5 dia de eng + testes. Não é trabalho gigante, mas é mais um item da lista "tudo que você precisa construir" da lib interna, e é **bloqueante para produção** — sem isso a lib não é viável.
-
-#### 1.2.11 Orchestrator marca COMPENSATED antes da compensação completar (NOVO — T2.3)
-
-Validado empiricamente em **T2.3**: o orchestrator atual publica TODAS as mensagens de compensação numa fila e **imediatamente seta `status='COMPENSATED'` no DB** — sem esperar ack dos handlers. Tempo medido: **103ms** do trigger até DB marcado COMPENSATED, enquanto handlers de compensação ainda estavam dormindo 3s.
-
-Implicações:
-
-- `SELECT * FROM sagas WHERE status='COMPENSATED'` **não garante** que estoque foi liberado e crédito reembolsado de fato.
-- Em postmortem, o estado no DB pode dizer "compensada com sucesso" enquanto handler de `refundCredit` ainda nem foi executado (ou falhou silenciosamente).
-- Combinado com §1.2.10: se broker cai durante a janela entre publish da compensação e execução do handler, a saga fica eternamente "COMPENSATED no DB / não compensada na realidade".
-
-**Mitigação:** orchestrator precisa consumir eventos `compensation.completed` (não emitidos atualmente) e só marcar COMPENSATED quando todas chegarem. Custo: ~25 LOC + testes. **Bloqueante para produção** — sem isso, observabilidade é fundamentalmente quebrada.
-
-#### 1.2.12 "Caminhos de falha" exigem código explícito para virar `status=FAILED` (NOVO — T2.2)
-
-Validado em **T2.2**: para que o alerter consiga detectar uma saga falhada, alguém precisa ter convertido a falha em `status='FAILED'` no DB. No PoC isso foi feito explicitamente para o caso "compensation.failed" (≈12 LOC em T1.2). Mas há outros caminhos de falha:
-
-- Handler de step lança exception não tratada → emite `step.failed` → orchestrator compensa OK.
-- Compensação lança exception → emite `compensation.failed` → orchestrator marca FAILED. (feito)
-- Orchestrator crasha mid-compensação → saga fica RUNNING/COMPENSATING órfã indefinidamente. (não tratado)
-- Mensagem em DLX por timeout consumer → não emite nada para o orchestrator.
-- Saga timeout absoluto → não há conceito de timeout na lib.
-
-Cada novo caminho de falha exige nova lógica de conversão na lib. Em Temporal, **qualquer falha terminal** vira `ExecutionStatus='Failed'` automaticamente (timeout, panic, retry esgotado, terminação manual) sem código próprio.
-
-**Implicação prática:** alertas e dashboards no RabbitMQ são tão bons quanto a cobertura dos caminhos de falha pela lib. Esquecer um = saga silenciosamente quebra sem alerta. Disciplina permanente.
-
-#### 1.2.13 Sem health-check de storage (NOVO — T4.2)
-
-Validado parcialmente em **T4.2**: ao mover o arquivo SQLite mid-flight, o orchestrator daemon ficou consultando o file descriptor antigo (arquivo já desvinculado do path), enquanto o trigger CLI criou novo arquivo vazio. Resultado: saga registrada num arquivo, daemon procurando em outro, **sem erro propagado para o usuário** — trigger retornou exit 0, daemon emitiu apenas `saga not found` em stderr.
-
-Em produção (MariaDB ao invés de SQLite local), o cenário equivalente é "DB unreachable" → PDOException. A lib atual não trata exceções de DB no orchestrator daemon → provável crash silencioso ou loop infinito.
-
-**Mitigação:**
-
-1. Try/catch em todas as queries com retry exponencial. (~10 LOC)
-2. Health-check periódico do DB com circuit breaker. (~30 LOC)
-3. Modo "degradado" que para de aceitar novas sagas quando storage indisponível, em vez de aceitar e perder. (~20 LOC)
-
-**Custo: ~1 dia de eng**, mais um item para a lista de débitos pré-produção. Em Temporal, a equivalente "Postgres do server caído" foi testada em T1.4 — workers continuam, eventualmente erram, e RECUPERAM quando Postgres volta sem corrupção.
-
-#### 1.2.14 Sem conceito de timeout de handler (NOVO — T4.4)
-
-Validado em **T4.4**: a lib não tem mecanismo nativo para detectar handler travado. Se um handler chama HTTP sem timeout configurado, ou bloqueia em deadlock, **o consumer fica bloqueado indefinidamente** (qos=1 ⇒ uma mensagem por vez). Outras mensagens na fila ficam aguardando.
-
-Implicações:
-
-- Handler buggy = saga inteira para. Outras sagas no mesmo service também param.
-- Sem timeout, postmortem é difícil: "saga X parou no step 2" sem saber se está travada ou apenas demorada.
-- Não há classificação "timeout" vs "exception" — ambos viram `step.failed` igualmente.
-
-**Mitigação para atingir paridade com Temporal:**
-
-1. Timeout via `pcntl_alarm` ou exec em subprocess. (~30-50 LOC + edge cases)
-2. Distinção entre "timeout" e "exception" no event emitido. (~5 LOC)
-3. Documentação para devs definirem timeouts apropriados por handler.
-
-**Custo estimado: ~1 dia de eng** + disciplina permanente para configurar timeout em cada novo handler.
-
-#### 1.2.15 Deadlock SQLite sob concorrência (NOVO — T6.2)
-
-Validado em **T6.2**: rodar 1000 sagas sequenciais com bench script + orchestrator daemon ambos escrevendo no mesmo SQLite causou exception "SQLSTATE[HY000]: General error: 5 database is locked" após poucas iterações. **A lib não estava configurada com `PRAGMA busy_timeout` nem `journal_mode = WAL`** — defaults do SQLite serializam writers e falham fast em contention.
-
-Fix aplicado em ~2 LOC:
-
-```php
-$this->pdo->exec('PRAGMA busy_timeout = 5000');
-$this->pdo->exec('PRAGMA journal_mode = WAL');
-```
-
-Com isso, o bench passou de exception após 100 iterations para 1000 sagas completas em 21.5s sem nenhum lock issue.
-
-**Achado paralelo importante:** este é o tipo de bug que aparece **só em testes de carga**. A lib provavelmente passaria em todos os testes de unidade e mesmo testes de integração com 1 saga por vez. Um time adotando a lib sem testar concorrência iria descobrir esse bug em produção. **Item para a lista de débitos pré-produção** — se for usar SQLite ou MariaDB, configurar isolation/timeout corretos desde o dia 1.
-
-Em produção com MariaDB, deadlocks ainda existem mas são gerenciados pelo DB engine. A lib precisa setar `PDO::ATTR_TIMEOUT` apropriado e tratar `PDOException` com retry exponencial. Mais código a manter.
-
----
-
-### 1.3 Como mitigar os contras
-
-| Contra                                                   | Mitigação                                                                                                                                                                                                                                                                                                                                                                                           | Custo                                |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| Idempotência manual em tudo                              | Helper na lib que oferece `IdempotencyKey` derivado de `saga_id + step_name`. Tabela `processed_keys` consultada no início de cada handler.                                                                                                                                                                                                                                                         | ~1 dia + disciplina                  |
-| Sem timeline visual                                      | Tabela `saga_events` append-only + script de export para Grafana ou UI minimalista.                                                                                                                                                                                                                                                                                                                 | 1-2 dias                             |
-| Sagas órfãs                                              | Método `resumeStuckSagas()` rodando no boot do orchestrator.                                                                                                                                                                                                                                                                                                                                        | 1-2 dias                             |
-| Bus factor                                               | Documentação obrigatória + dois mantenedores formalmente designados + ADR + code review centralizado de mudanças na lib.                                                                                                                                                                                                                                                                            | Recorrente                           |
-| Disciplina erodindo o padrão                             | Lint customizado (PHPStan rule) que detecta uso não-padrão da lib.                                                                                                                                                                                                                                                                                                                                  | 1-2 dias                             |
-| Mudança de shape (§1.2.8) **REFORÇADO/CRÍTICO**          | Versionamento explícito de saga_definition (ex.: coluna `saga_version` + `definition(int $version): array`). Confirmado em T1.5: 25-30 LOC infra + 10 LOC por saga. **T5.1 mostrou que sem isso, reordenação de step durante deploy gera silent corruption** (estoque duplicado, pagamento perdido, saga marcada COMPLETED). Mitigação técnica + lint, mas depende de disciplina humana permanente. | 1-2 dias + risco residual permanente |
-| Workers não reconectam (§1.2.10) **NOVO/BLOQUEANTE**     | Try/catch + loop de reconexão com backoff exponencial em `AmqpTransport::consume()`. Confirmado em T1.4 como gap real.                                                                                                                                                                                                                                                                              | ~0.5 dia                             |
-| DB mente sobre compensação (§1.2.11) **NOVO/BLOQUEANTE** | Orchestrator consumir `compensation.completed` events e só marcar COMPENSATED após todas chegarem. Confirmado em T2.3.                                                                                                                                                                                                                                                                              | ~25 LOC + testes                     |
-| Caminhos de falha exigem conversão explícita (§1.2.12)   | Cobertura sistemática de cada caminho: step.failed, compensation.failed, orchestrator crash, DLX, timeout. Cada um vira código.                                                                                                                                                                                                                                                                     | ~3-5 dias para cobrir todos          |
-| Health-check de storage (§1.2.13) **NOVO**               | Try/catch em queries + circuit breaker + modo degradado quando DB indisponível. Confirmado em T4.2 como gap real.                                                                                                                                                                                                                                                                                   | ~1 dia                               |
-| Conceito de timeout de handler (§1.2.14) **NOVO**        | Timeout via `pcntl_alarm` + distinção timeout/exception nos events + documentação por handler. Confirmado em T4.4 como gap real.                                                                                                                                                                                                                                                                    | ~1 dia + disciplina permanente       |
-| Alertas externos                                         | Alerter standalone (script PHP de ~40 LOC consultando `status='FAILED'` em SQLite) + integração webhook real (Slack/PagerDuty). Confirmado em T2.2.                                                                                                                                                                                                                                                 | ~0.5 dia                             |
-| Deadlock de DB sob concorrência (§1.2.15) **NOVO**       | `PRAGMA busy_timeout` + `journal_mode=WAL` (SQLite) ou `PDO::ATTR_TIMEOUT` + retry com backoff (MariaDB). Confirmado em T6.2 — fix de 2 LOC bastou para a PoC, mas em produção precisa cobertura sistemática + testes de carga.                                                                                                                                                                     | ~0.5 dia + testes de carga           |
-
-**Custo total agregado para chegar a "produção responsável" (revisado pós-Tier 1+2+3+4+5+6):** **~17-23 dias de engenharia inicial** + manutenção recorrente. Tier 5 não adicionou novos custos (apenas reforçou T1.1). Tier 6 adicionou ~0.5 dia (§1.2.15). Continua viável, mas a margem encolheu mais.
-
----
-
-## 2. Temporal
-
-### 2.1 Prós
-
-#### 2.1.1 SAGA first-class
-
-- API `Workflow\Saga` declarativa: cada `addCompensation()` registra reversão para o step que acabou de rodar.
-- LIFO automático na hora da reversão. Sem código próprio.
-- Compensação em paralelo opcional (`setParallelCompensation(true)`).
-
-#### 2.1.2 Durable execution out of the box (confirmado em T1.4 + T4.1)
-
-- Estado da saga vive no engine (event-sourced em Postgres/MySQL/Cassandra — **MariaDB não é suportado**, ver achado §2.2.6 em `findings-temporal.md`), não no banco da aplicação.
-- Sobrevive a crash de worker, restart de cluster, deploy do worker, deploy do server.
-- "Mecanismo de resume on boot" é grátis — nem existe esse conceito explícito porque o engine sempre sabe onde retomar.
-
-**Confirmações empíricas:**
-
-- **T1.4:** Postgres do Temporal foi parado por 30s mid-flight. Workflow ficou pausado. Quando Postgres voltou, workflow retomou e completou normalmente. Sem corrupção.
-- **T4.1:** `service-a-worker` foi desconectado da rede por 10s durante uma activity. Activity completou no `Attempt:1` (sem retry), buffer interno do worker preservou resultado, enviado ao reconectar. Worker resilient a network blips.
-- O análogo no RabbitMQ-PoC (T1.4) mostrou comportamento dramaticamente diferente: workers caem com `AMQPProtocolConnectionException` e ficam Exited, exigindo intervenção manual. Diferença qualitativa: Temporal **sobrevive a falhas de infra sem trabalho do dev**; RabbitMQ exige código de reconexão na lib.
-
-#### 2.1.3 Exactly-once de activity execution
-
-- Engine garante (via event sourcing + workflow determinístico) que cada activity executa **exatamente uma vez** com sucesso.
-- A classe de bug do Cenário C (RabbitMQ+lib) **não existe** aqui. Idempotência ainda é boa prática (em raros casos de timeout + recovery), mas não é responsabilidade central do dev.
-
-#### 2.1.4 Observabilidade entrega timeline rica (reforçado em T3.4)
-
-- **Temporal Web UI**: cada workflow tem timeline completa, com payload de entrada/saída de cada activity, retries, compensações, decisões. **Postmortem é navegação visual, não SQL.**
-- Search por workflow ID, por type, por tag.
-- Replay de execução passada literalmente possível (re-rodar workflow do início com histórico antigo).
-- Sem custo de engenharia para chegar nesse nível.
-
-**Confirmação empírica T3.4:** medido o tempo prático para reconstruir o passo-a-passo de uma saga arbitrária:
-
-- **Temporal:** 30s-1min via UI ou `tctl workflow show` (97 linhas de history com payloads completos, retry attempts, timing).
-- **RabbitMQ:** 2-15min, com limitações severas — **payloads de entrada não são persistidos** (lib guarda só `result`); precisa correlacionar logs de N containers; sem replay programático.
-
-**Insight chave:** o gap real não é "Temporal tem UI bonita". É **profundidade de informação consultável sem ter previsto a consulta**. Em Temporal, qualquer field que passou por uma activity está no history para sempre. Em RabbitMQ, se algo não foi persistido naquele momento, não dá para recuperar.
-
-#### 2.1.5 Versionamento explícito (custo, mas honesto) — confirmado em T1.1+T1.5
-
-- `Workflow::getVersion()` força o dev a tratar mudanças de shape conscientemente.
-- Em RabbitMQ+lib o mesmo problema existe **implícito** (e por isso pior — é fácil esquecer).
-- Para sagas curtas (segundos-minutos como o workflow de referência), o uso de getVersion é raríssimo: deploy → fila drena → todas as novas sagas usam código novo.
-
-**Confirmação empírica:**
-
-- **T1.1** mostrou Temporal lançando `[TMPRL1100]` panic explícito quando código de Workflow mudou enquanto saga estava em voo SEM `getVersion` — workflow ficou stuck até intervenção. RabbitMQ no mesmo cenário completou silenciosamente com a definição antiga (perigoso).
-- **T1.5** mostrou Temporal lidando corretamente quando `getVersion` está aplicado: saga em voo (sem o novo step) e saga nova (com novo step) coexistiram no mesmo deploy. Custo: **4 LOC inline** no workflow code.
-- O análogo manual em RabbitMQ exigiria coluna `saga_version` + `definition(int $version): array` + lógica de seleção: ~25-30 LOC infra na lib + ~10 LOC por saga concreta + lint customizado (~1-2 dias de eng).
-- **Diferença real:** Temporal cobra o custo de versionamento **on-demand** (paga 4 LOC quando precisa); RabbitMQ cobra **upfront** (boilerplate em todas as sagas mesmo se nunca for usar).
-
-#### 2.1.6 Worker pull model
-
-- Workers fazem long-polling no Temporal server; não precisam de inbound firewall.
-- Escala horizontal trivial (subir mais containers).
-- Convive com qualquer topologia de rede.
-
-#### 2.1.7 Temporal Cloud reduz overhead inicial
-
-- Free tier para PoC; Essentials ~$100/mês até pequena escala.
-- Sem operação de cluster (Postgres + ES + 4 serviços) durante adoção.
-- Saída Cloud → self-hosted depois é re-aponte de namespace, sem rewrite de código.
-
-#### 2.1.8 SDK PHP ativo e maduro o bastante
-
-- v2.17.1 (mar/2026), 2.4M installs.
-- Spiral Scout mantém sob contrato com Temporal Inc.
-- Cobre 100% das primitivas que importam: Workflow, Activity, Saga, Signal, Query, Timer.
-
-#### 2.1.9 Classificação rica de falhas (NOVO — T4.4)
-
-Validado em **T4.4**: Temporal distingue na plataforma 4 tipos de timeout (`StartToClose`, `ScheduleToClose`, `ScheduleToStart`, `Heartbeat`) de falhas de aplicação (`ApplicationFailureInfo`). Eventos no history são distintos:
-
-- `ActivityTaskTimedOut` + `TimeoutFailureInfo:{TimeoutType:...}` para timeouts.
-- `ActivityTaskFailed` + `ApplicationFailureInfo:{Message:...}` para erros lançados pelo handler.
-
-Implicações:
-
-- RetryPolicy pode tratar tipos diferente via `NonRetryableErrorTypes`.
-- Postmortem distingue "activity demorou demais" de "activity bugou" sem precisar de código próprio.
-- Web UI mostra ícones distintos.
-
-No RabbitMQ-PoC, **handler travado bloqueia consumer indefinidamente** (qos=1) e não há classificação — handler que dorme 5 minutos em deadlock parece igual a handler que retorna em 50ms. Para vários domínios com SLOs por step, essa distinção é importante na operação. Custo para implementar em RabbitMQ: ~1 dia de eng + disciplina (§1.2.14).
-
----
-
-### 2.2 Contras
-
-#### 2.2.1 Dialética diferente do Laravel — o dev programa em "Temporal", não em "Laravel"
-
-Este é o custo de adoção mais subestimado. **Workflow code não é PHP comum.** É um subset rígido com regras próprias que existem para garantir determinismo (replay correto a partir do event history).
-
-A própria documentação oficial do Temporal lista o que é proibido dentro de Workflow:
-
-> _Always do the following in the Workflow implementation code:_
->
-> - _Don't perform any IO or service calls as they are not usually deterministic. Use Activities for this._
-> - _Only use `Workflow::now()` to get the current time inside a Workflow._
-> - _Call `yield Workflow::timer()` instead of `sleep()`._
-> - _Do not use any blocking SPL provided by PHP (i.e. `fopen`, `PDO`, etc) in Workflow code._
-> - _Use `yield Workflow::getVersion()` when making any changes to the Workflow code. Without this, any deployment of updated Workflow code might break already open Workflows._
-> - _Don't access configuration APIs directly from a Workflow because changes in the configuration might affect a Workflow Execution path. Pass it as an argument to a Workflow function or use an Activity to load it._
-
-Traduzindo para o que o dev sente no dia a dia:
-
-- **`date()`, `time()`, `microtime()` proibidos** dentro de Workflow → usar `Workflow::now()`.
-- **`sleep()`, `usleep()`, `time_nanosleep()` proibidos** → usar `yield Workflow::timer()`.
-- **`rand()`, `random_int()`, `uniqid()` proibidos** → usar `yield Workflow::sideEffect(fn() => ...)`.
-- **DB queries (`PDO`, Eloquent) proibidos** → mover para Activities.
-- **HTTP calls (`Guzzle`, `Http::get()`) proibidos** → mover para Activities.
-- **`var_dump()`, `dd()`, `echo` para debug não funcionam** (workflow é replay).
-- **`config('app.timezone')` proibido** — passar como argumento ou ler via Activity.
-- **Iterações sobre `$_ENV`, `getenv()`, `file_get_contents()` proibidas** dentro de Workflow.
-
-Consequências práticas:
-
-1. **Curva de aprendizado real**: dev Laravel-first precisa "desligar" reflexos antigos. Os primeiros 1-2 meses são propensos a bugs sutis ("por que minha saga quebrou no replay se rodou ontem?"). Erro contraintuitivo.
-2. **Code review precisa de novo critério**: reviewer agora precisa garantir que o código de Workflow não tem nenhum dos pecados acima. Sem lint, é certo que algo escapa.
-3. **Onboarding de novos devs aumenta**: além de "aprender o monorepo", aprende-se "aprender Temporal-PHP". Não é monstruoso, mas é real.
-4. **Activities, em compensação, são PHP comum**: dentro delas, tudo é permitido. A dialética só vale para Workflow code. Como a maior parte da regra de negócio mora em Activities, isso atenua mas não elimina o custo.
-5. **`yield` em todo lugar muda o estilo de programação**: para quem não tem familiaridade com generators (caso típico em equipe Laravel), é estranho no início. `yield $activities->reserveStock(...)` é a chamada de uma activity.
-
-**Mitigação possível** (mas sempre custo):
-
-- Pacote interno (wrapper Laravel-Temporal) que esconde parte das arestas atrás de uma API mais Laravel-ish.
-- Lint customizado (PHPStan rule) que detecta `date()`, `rand()`, `PDO`, etc. dentro de classes marcadas com `#[WorkflowInterface]` e falha CI.
-- Treinamento + exemplos canônicos no template padrão.
-- Code review centralizado de mudanças em Workflow code nas primeiras N semanas.
-
-**Avaliação honesta**: este é provavelmente o **maior custo de adoção** do Temporal num time Laravel-first. Não é dealbreaker, mas é semestre de calibração antes de virar background noise.
-
-#### 2.2.2 RoadRunner obrigatório nos workers
-
-- Temporal PHP SDK exige RoadRunner como runtime (long-lived workers, não FPM/CLI tradicional).
-- Cada app que orquestra workflows vira "meio Laravel/meio RoadRunner".
-- Configuração `.rr.yaml` é mais um arquivo a entender e manter.
-- Em ambiente Kubernetes, é só mais um Deployment — não é problema em si, mas é mais uma peça móvel.
-- Workers em containers separados dos containers HTTP da API → não há contaminação do runtime FPM, mas é mais um set de containers a operar.
-
-#### 2.2.3 SDK PHP é "segunda classe"
-
-- Mantido pela Spiral Scout (sob contrato), não pelo Temporal core team que mantém Go/Java.
-- Features novas chegam primeiro em Go/Java. Em 2-3 anos pode haver gap de 6-12 meses.
-- Se Temporal Inc decidir cortar contrato com Spiral Scout, situação fica precária — embora o SDK seja OSS e tenha 2.4M installs (custo de fork seria viável).
-- **Risco residual**: time PHP fica atrás na curva.
-
-#### 2.2.4 Ecosystem PHP do Temporal é magro
-
-- `temporal/sdk`: 384 stars no GitHub (vs milhares em Go/Java).
-- `keepsuit/laravel-temporal`: 50 stars (single mantenedor).
-- StackOverflow / GitHub issues / blog posts: ordens de magnitude menos conteúdo que Java/Go.
-- Quando algo der errado, "googlar" o problema retorna menos resultados úteis.
-
-#### 2.2.5 Self-hosting é não-trivial
-
-- Cluster Temporal: 4 serviços (Frontend, History, Matching, Worker) + Postgres/MySQL + (opcional) Elasticsearch. **MariaDB não é suportado** (achado §2.2.6 — adoção exige 2º SGBD).
-- Helm chart oficial existe, mas operar persistência (Postgres dedicado) e indexação (ES) vira trabalho de SRE.
-- **Em Kubernetes o overhead é menor** (managed Aurora Postgres ou Aurora MySQL, OpenSearch managed) — mas ainda assim mais peças que RabbitMQ, e mais um SGBD a operar além do principal.
-- **Em Swarm é não-suportado oficialmente** — precisa Cloud ou Kubernetes.
-
-#### 2.2.6 Lock-in moderado
-
-- API é OSS, mas a "forma de pensar" (workflow + activity + signals + saga) é específica do Temporal.
-- Migrar workflows de Temporal para outro engine seria **rewrite**, não re-deploy.
-- **Mitigação**: pacote interno isola apps do SDK. Trocar SDK fica concentrado num ponto.
-
-#### 2.2.7 Custo financeiro em Cloud
-
-- Temporal Cloud Essentials: ~$100/mês.
-- Growth: ~$200/mês.
-- Acima desse volume, vira ~$500-1000/mês rapidamente (cobrança por actions).
-- Self-hosted em Kubernetes evita o custo Cloud, mas adiciona ops.
-
----
-
-### 2.3 Como mitigar os contras
-
-| Contra                 | Mitigação                                                                                                                        |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Dialética diferente    | Pacote interno + lint PHPStan + treinamento + exemplos canônicos. Investimento concentrado nos primeiros 3-6 meses.              |
-| RoadRunner             | Containers de worker separados; time não toca config no dia a dia. Template canônico pronto.                                     |
-| SDK PHP segunda classe | Pacote interno isola apps. Se SDK estagnar, trocar é trabalho concentrado. Forkar é viável (Apache 2.0).                         |
-| Ecosystem magro        | Comprar suporte do Temporal (se Cloud) ou contratar consultoria pontual nas primeiras semanas. Investir em documentação interna. |
-| Self-hosting complexo  | Começar Cloud. Migrar para Kubernetes self-hosted **só** quando volume justificar (regra de bolso: >$500/mês de Cloud).          |
-| Lock-in                | Aceitar como custo. API é OSS — não há fornecedor único trancando o produto.                                                     |
-| Custo Cloud            | Self-host quando justificar.                                                                                                     |
-
----
-
-## 3. Cruzamento: o que cada um faz "melhor"
-
-Tabela atualizada após bateria Tier 1 + Tier 2. Itens com asterisco têm medição empírica (não mais especulação).
+Tabela consolidada após baterias Tier 1 a Tier 6 (ver [`checklist-testes.md`](./checklist-testes.md)). Itens com referência `T*` têm medição empírica.
 
 | Critério                                              | RabbitMQ + lib interna                                                                            | Temporal                                                                                                              |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | **Adoção rápida com time atual**                      | sim                                                                                               | parcial (curva inicial real)                                                                                          |
 | **Sem lock-in**                                       | sim                                                                                               | parcial (lock-in moderado, OSS)                                                                                       |
-| **Durable execution out-of-the-box** T1.4             | parcial (workers caem com broker e não reconectam — §1.2.10)                                      | sim (sobreviveu a 30s de Postgres caído)                                                                              |
-| **Exactly-once de activity** T1.2                     | parcial (risco condicional, não certeza — §1.2.2 revisado)                                        | sim (exactly-once estrutural)                                                                                         |
+| **Durable execution out-of-the-box** T1.4             | parcial (workers caem com broker e não reconectam)                                                | sim (sobreviveu a 30s de Postgres caído)                                                                              |
+| **Exactly-once de activity** T1.2                     | parcial (risco condicional, não certeza)                                                          | sim (exactly-once estrutural)                                                                                         |
 | **Observabilidade visual de saga**                    | não (precisa construir)                                                                           | sim                                                                                                                   |
 | **Compensação first-class**                           | parcial (constrói em ~30 LOC)                                                                     | sim                                                                                                                   |
 | **Compensação paralela** T2.3                         | parcial (paralelo natural por arquitetura, não controlável por LOC)                               | sim (1 LOC switch)                                                                                                    |
-| **Estado da compensação no DB confiável** T2.3        | não (lib atual mente — §1.2.11)                                                                   | sim (engine só marca completed após handlers terminarem)                                                              |
+| **Estado da compensação no DB confiável** T2.3        | não (lib atual mente: marca COMPENSATED em 103ms antes dos handlers terminarem)                   | sim (engine só marca completed após handlers terminarem)                                                              |
 | **Replay/postmortem**                                 | não (precisa construir)                                                                           | sim                                                                                                                   |
 | **Versionamento de saga** T1.1+T1.5                   | parcial (implícito → silencioso; mitigação 25-30 LOC infra + 10 LOC/saga)                         | sim (panic explícito; mitigação 4 LOC inline com `getVersion`)                                                        |
-| **Throughput (100 sagas concorrentes)** T1.3          | sim ~48 sagas/s, 187 MB RAM total                                                                 | parcial ~28 sagas/s, 629 MB RAM total                                                                                 |
+| **Throughput burst (100 sagas concorrentes)** T1.3    | sim ~142 sagas/s (4.3+Khepri); 187 MB RAM total                                                   | parcial ~28 sagas/s, 629 MB RAM total                                                                                 |
 | **Throughput sustentado (5 min × 10/s)** T3.3         | sim 9.7/s, 0 falhas, RAM volta a baseline                                                         | sim 9.5/s, 0 falhas, +311 MB de history (não é leak)                                                                  |
-| **Footprint idle (RAM total)** T3.2                   | sim ~170 MB                                                                                       | parcial ~439 MB (~2.6x mais)                                                                                          |
+| **Footprint idle (RAM total)** T3.2                   | sim ~137 MiB (4.3)                                                                                | parcial ~439 MB (~3.2x mais)                                                                                          |
 | **Tamanho de imagens Docker** T3.2                    | sim ~665 MB total                                                                                 | parcial ~3800 MB total (~6x mais)                                                                                     |
 | **Cold start cacheado** T3.2                          | sim ~10s até saga rodar                                                                           | parcial ~30s (afetado por race condition de inicialização)                                                            |
 | **Setup novo dev (sem cache)** T3.1                   | sim ~2-3 min                                                                                      | não ~25 min (PECL grpc compile)                                                                                       |
 | **Detecção de falha (alerta)** T2.2                   | sim ~1s lag (40 LOC alerter)                                                                      | sim ~7s lag (40 LOC alerter; lag dominado por retries)                                                                |
-| **Cobertura automática de caminhos de falha** T2.2    | não (cada caminho exige código — §1.2.12)                                                         | sim (Failed automático para qualquer falha terminal)                                                                  |
+| **Cobertura automática de caminhos de falha** T2.2    | não (cada caminho exige código próprio)                                                           | sim (Failed automático para qualquer falha terminal)                                                                  |
 | **Postmortem / replay de saga antiga** T3.4           | parcial 2-15 min, sem payloads de entrada, sem replay                                             | sim 30s-1min via UI/tctl, history completo, replay programático                                                       |
 | **Resiliência a network outage (worker)** T4.1        | não workers caem com broker, não reconectam (T1.4)                                                | sim worker buferou resultado em 10s outage, completou Attempt:1                                                       |
-| **Robustez a falha de storage** T4.2                  | não silent inconsistency, sem health-check (§1.2.13)                                              | sim workflows pausam até storage voltar, sem corrupção (T1.4)                                                         |
-| **Conceito nativo de timeout** T4.4                   | não inexistente; handler travado bloqueia consumer (§1.2.14)                                      | sim 4 tipos de timeout distintos + classificação no history                                                           |
-| **Compensação trivial (falha em step 1)** T4.3        | sim compensa em ms (sem retry)                                                                    | sim compensa em ~3s (3 retries default)                                                                               |
-| **Reordenamento de steps durante deploy** T5.1        | não **silent corruption**: saga COMPLETED com state inconsistente, estoque 2x, pagamento perdido  | sim panic LOUD com mensagem clara (`history event X vs replay Y`); workflow stuck até intervenção, estado preservado  |
-| **Mudança de shape de payload** T5.2                  | sim compensa corretamente, mensagem de erro nos logs (1 attempt)                                  | sim compensa corretamente, mensagem de erro no history (3 retries)                                                    |
+| **Robustez a falha de storage** T4.2                  | não silent inconsistency, sem health-check                                                        | sim workflows pausam até storage voltar, sem corrupção                                                                |
+| **Conceito nativo de timeout** T4.4                   | não inexistente; handler travado bloqueia consumer                                                | sim 4 tipos de timeout distintos + classificação no history                                                           |
+| **Reordenamento de steps durante deploy** T5.1        | não **silent corruption**: saga COMPLETED com state inconsistente                                 | sim panic LOUD com mensagem clara; workflow stuck até intervenção, estado preservado                                  |
+| **Mudança de shape de payload** T5.2                  | sim compensa corretamente (1 attempt)                                                             | sim compensa corretamente (3 retries default)                                                                         |
 | **Latência fim-a-fim p99** T6.2                       | sim 22ms (max 25ms, distribuição apertada)                                                        | parcial 351ms (~16x mais lento, distribuição bimodal)                                                                 |
 | **Throughput sequencial** T6.2                        | sim ~46 sagas/s                                                                                   | parcial ~7.4 wfs/s (~6x menor)                                                                                        |
-| **Custo Cloud em escala (estimado)** T6.1             | sim self-host viável                                                                              | não ~$58k/ano em volume agregado; inviável em escala — self-host é a opção sensata                                    |
-| **DX em code review**                                 | sim (PHP comum, espalhado em 6 arquivos)                                                          | parcial (saga em 1 arquivo, mas precisa entender determinismo)                                                        |
-| **Operação em produção**                              | parcial (clustering RabbitMQ + lib que precisa cobrir 3 gaps bloqueantes)                         | parcial (Temporal cluster ou Cloud)                                                                                   |
-| **Custo financeiro 12 meses**                         | sim ($2400-4800 + ~15-20 dias eng)                                                                | parcial ($1200-2400 Cloud / $3000-6000 self-host)                                                                     |
+| **Custo Cloud em escala (estimado)** T6.1             | sim self-host viável                                                                              | não ~$58k/ano em volume agregado; inviável — self-host é a opção sensata                                              |
+| **DX em code review**                                 | sim (PHP comum)                                                                                   | parcial (saga centralizada em 1 arquivo, mas precisa entender determinismo)                                           |
+| **Operação em produção**                              | parcial (clustering RabbitMQ + lib que precisa cobrir gaps bloqueantes)                           | parcial (Temporal cluster ou Cloud)                                                                                   |
 | **Bus factor**                                        | não (lib interna)                                                                                 | sim (SDK público com 2.4M installs)                                                                                   |
 | **Maturidade da plataforma**                          | sim (RabbitMQ 18+ anos)                                                                           | sim (Temporal 5+ anos, mas crescendo rápido)                                                                          |
 
-**Score qualitativo revisado pós Tier 1+2+3+4+5+6:**
+### Pontos chave do RabbitMQ + lib interna
+
+Os 5 pontos que mais pesam, condensados (detalhe completo em [`findings-rabbitmq.md`](./findings-rabbitmq.md)):
+
+1. **Continuidade com a stack existente** — sem runtime novo, sem `yield`, sem determinismo. Code review entra na rotina.
+2. **Throughput e footprint enxutos** — 142 sagas/s burst (T1.3), p99 de 22ms sequencial (T6.2), ~137 MiB idle, ~10s cold start.
+3. **Tudo o que não é transport, você constrói** — state machine, idempotência, outbox, DLX, resume on boot, observabilidade. Custo agregado pré-produção: ~17-23 dias de eng inicial + manutenção recorrente.
+4. **Silent corruption sob reordenamento de step** (T5.1) — saga marcada COMPLETED com state inconsistente, sem alerta, sem panic. É o argumento mais cético do estudo (ver §4).
+5. **Lib atual mente sobre estado de compensação** (T2.3) — orchestrator marca COMPENSATED em 103ms enquanto handlers ainda dormem 3s. Bloqueante para produção; mitigação ~25 LOC.
+
+### Pontos chave do Temporal
+
+Os 5 que mais pesam (detalhe em [`findings-temporal.md`](./findings-temporal.md)):
+
+1. **Durable execution out of the box** — sobreviveu a 30s de Postgres caído (T1.4) e a 10s de network outage de worker sem retries (T4.1).
+2. **Observabilidade rica e profunda** — timeline visual, payloads de entrada/saída de cada activity persistidos, replay programático. Postmortem em 30s-1min via Web UI vs 2-15 min em RabbitMQ (T3.4).
+3. **Versionamento explícito honesto** — panic LOUD em mudança de shape (T5.1); mitigação on-demand de 4 LOC com `getVersion` (T1.5).
+4. **Dialética diferente do PHP comum** — workflow code é subset rígido (sem `date()`, sem `sleep()`, sem `PDO`, sem `rand()`). Curva de adoção real de 1-2 meses para time PHP-first; este é o maior custo de adoção.
+5. **Custo Cloud cresce com volume** — em escala agregada (~120M actions/mês) chega a ~$58k/ano (T6.1). Cloud só faz sentido em adoção; self-host vira inevitável em escala.
+
+### Score qualitativo
 
 - **Temporal vence:** durable execution, exactly-once, observabilidade visual, compensação first-class, estado da compensação confiável, replay, versionamento (com mitigação correta), cobertura automática de falhas, postmortem rico, resiliência a network outage, robustez a falha de storage, conceito de timeout nativo, bus factor, **reordenamento de steps (silent corruption no RabbitMQ)** = **14 critérios**.
 - **RabbitMQ vence:** adoção rápida, sem lock-in, throughput burst, footprint idle, tamanho de imagens, cold start, setup novo dev, detecção de falha (lag), DX em code review, maturidade da plataforma, **latência p99**, **throughput sequencial**, **custo Cloud em escala** = **13 critérios**.
-- **Empate/ambos com ressalvas:** operação em produção, throughput sustentado, compensação trivial, mudança de shape de payload (T5.2).
+- **Empate:** operação em produção, throughput sustentado, compensação trivial, mudança de shape de payload.
 
-Tier 5 adicionou **reordenamento de steps** (silent corruption no RabbitMQ vs panic explícito no Temporal — assimétrico). Tier 6 adicionou 3 critérios onde RabbitMQ vence (latência, throughput sequencial, custo Cloud em escala). Score ficou quase empatado em quantidade (14 vs 13), mas a **natureza dos critérios continua assimétrica**.
+A **assimetria de peso** é o ponto chave:
 
-A **assimetria de peso** continua sendo o ponto chave:
+- Critérios em que Temporal vence são **qualitativos** (correção, observabilidade, durabilidade, segurança contra silent corruption) e ligados a confiança em produção.
+- Critérios em que RabbitMQ vence são **quantitativos** (throughput, RAM, tamanho, lag) e ligados a DX local.
 
-- Os critérios em que Temporal vence são **qualitativos** (correção, observabilidade, durabilidade, resiliência, segurança contra silent corruption) e ligados a confiança em produção.
-- Os em que RabbitMQ vence são **quantitativos** (throughput, RAM, tamanho, lag) e ligados a DX local.
-
-Na prática:
-
-- **Para padrão usado por múltiplos serviços durante anos:** os critérios qualitativos do Temporal pesam mais — especialmente após o achado T5.1 sobre silent corruption real (ver §5).
-- **Para PoC isolada ou caso pontual:** os critérios quantitativos do RabbitMQ pesam mais.
-
-O custo total da abordagem RabbitMQ subiu de ~10-15 dias (estimativa anterior) → ~15-20 dias após Tier 1+2 → ~17-22 dias após Tier 4 → **~17-22 dias após Tier 5** (sem novos custos, mas com **risco residual permanente** confirmado em T5.1). O "custo" de Temporal em RAM/disco/cold start é um trade-off, não débito.
+Para padrão usado por múltiplos serviços durante anos, os critérios qualitativos pesam mais — especialmente após T5.1 sobre silent corruption real (ver §4). Para PoC isolada ou caso pontual, os critérios quantitativos pesam mais.
 
 ---
 
-## 3.1 DX em code review — comparação concreta (NOVO — 2026-05-04)
+## §2 DX em code review
 
-A versão anterior deste documento listava "como fica o code review" como critério qualitativo, mas nunca operacionalizou. Esta seção mede com **dois cenários comuns de mudança em saga**, contra as 4 PoCs existentes. Métricas: arquivos tocados, LOC tocadas (excluindo whitespace), legibilidade do diff sem rodar.
+Comparação concreta com **dois cenários comuns de mudança em saga** contra as 4 PoCs existentes. Métricas: arquivos tocados, LOC tocadas (excluindo whitespace), legibilidade do diff sem rodar.
 
 ### Cenário A — Adicionar 1 step novo entre dois existentes (com sua compensação)
 
@@ -584,10 +98,10 @@ Tarefa: inserir um step `audit_log` (e sua compensação `unaudit_log`) entre `c
 
 | Modelo                      | Arquivos tocados | LOC tocadas (aprox.) | Local da mudança             | Reviewer entende sem rodar?                                                                  |
 | --------------------------- | ---------------- | -------------------- | ---------------------------- | -------------------------------------------------------------------------------------------- |
-| **RabbitMQ orquestrado**    | 3                | ~37                  | Centralizado em `definition()` + 2 arquivos de handler | ✅ Sim — basta ler o array de `Step` na ordem.                                              |
-| **RabbitMQ coreografado**   | 3                | ~33                  | Distribuído: 2 handlers novos + 2 chamadas `react()` em `bin/service-a.php` reordenadas | ⚠️ Parcial — reviewer precisa montar mentalmente a cadeia de eventos (`saga.started → … → audit.logged → saga.completed`); não há "definição central" para conferir. |
-| **Temporal**                | 3                | ~30                  | Centralizado em `execute()` + 2 métodos novos na interface/implementação | ✅ Sim — `execute()` é leitura linear; `addCompensation` deixa LIFO óbvio.                  |
-| **Step Functions**          | 3-4              | ~50+                 | Centralizado em `state-machine.json` + 1 handler PHP + atualizar bootstrap/ARN | ⚠️ Verboso — ASL exige Catch chain manual; reviewer precisa rastrear todos os `Catch.Next` para garantir LIFO. |
+| **RabbitMQ orquestrado**    | 3                | ~37                  | Centralizado em `definition()` + 2 arquivos de handler | Sim — basta ler o array de `Step` na ordem.                                                  |
+| **RabbitMQ coreografado**   | 3                | ~33                  | Distribuído: 2 handlers novos + 2 chamadas `react()` em `bin/service-a.php` reordenadas | Parcial — reviewer precisa montar mentalmente a cadeia de eventos (`saga.started → … → audit.logged → saga.completed`); não há "definição central" para conferir. |
+| **Temporal**                | 3                | ~30                  | Centralizado em `execute()` + 2 métodos novos na interface/implementação | Sim — `execute()` é leitura linear; `addCompensation` deixa LIFO óbvio.                      |
+| **Step Functions**          | 3-4              | ~50+                 | Centralizado em `state-machine.json` + 1 handler PHP + atualizar bootstrap/ARN | Verboso — ASL exige Catch chain manual; reviewer precisa rastrear todos os `Catch.Next` para garantir LIFO. |
 
 **Observações:**
 
@@ -601,10 +115,10 @@ Tarefa: trocar a ordem de `reserve_stock` (step 0) e `charge_credit` (step 1), d
 
 | Modelo                      | Arquivos tocados | LOC tocadas (aprox.) | Risco em sagas em voo durante deploy                                                          |
 | --------------------------- | ---------------- | -------------------- | ---------------------------------------------------------------------------------------------- |
-| **RabbitMQ orquestrado**    | 1                | ~6 (mover bloco no array) | 🚨 **Silent corruption (T5.1)** — sagas em voo executam definição nova sobre estado salvo na ordem antiga, sem aviso. |
-| **RabbitMQ coreografado**   | 2                | ~6 distribuídos              | ⚠️ Bagunça transitória — durante deploy, alguns serviços têm config nova e outros antiga; eventos podem ser publicados/consumidos numa cadeia inconsistente, mas **não há saga.definition central que entre em silent corruption** — cada serviço só processa o que entende. Risco: deadlock de cadeia (eventos não-consumidos). |
-| **Temporal**                | 1                | ~4 (trocar 2 yields)         | ✅ Replay panic (`TMPRL1100`) — workflow para de avançar e exige `Workflow::getVersion()` ou intervenção manual. **Honesto e seguro**.  |
-| **Step Functions**          | 1                | ~10+ (trocar `StartAt` + ajustar vários `Next`) | ✅ Imutabilidade — executions em voo continuam na versão antiga (Step Functions versiona implicitamente); só novas executions usam a definição nova. |
+| **RabbitMQ orquestrado**    | 1                | ~6 (mover bloco no array) | **Silent corruption (T5.1)** — sagas em voo executam definição nova sobre estado salvo na ordem antiga, sem aviso. |
+| **RabbitMQ coreografado**   | 2                | ~6 distribuídos              | Bagunça transitória — durante deploy, alguns serviços têm config nova e outros antiga; eventos podem ser publicados/consumidos numa cadeia inconsistente, mas **não há saga.definition central que entre em silent corruption** — cada serviço só processa o que entende. Risco: deadlock de cadeia (eventos não-consumidos). |
+| **Temporal**                | 1                | ~4 (trocar 2 yields)         | Replay panic (`TMPRL1100`) — workflow para de avançar e exige `Workflow::getVersion()` ou intervenção manual. **Honesto e seguro**.  |
+| **Step Functions**          | 1                | ~10+ (trocar `StartAt` + ajustar vários `Next`) | Imutabilidade — executions em voo continuam na versão antiga (Step Functions versiona implicitamente); só novas executions usam a definição nova. |
 
 **Observações:**
 
@@ -624,13 +138,13 @@ Tarefa: trocar a ordem de `reserve_stock` (step 0) e `charge_credit` (step 1), d
 | Reviewer afirma correção sem rodar                | **Orquestrado / Temporal** (centralizados) |
 | Reviewer precisa montar grafo de eventos          | **Coreografado** (mais difícil em fluxos médios/grandes) |
 
-**Conclusão para o estudo:** Temporal e RabbitMQ orquestrado têm **DX equivalente em mudanças aditivas**, mas Temporal vence claramente em **mudanças que reordenam ou removem steps** porque o engine força tratamento de versionamento. RabbitMQ coreografado paga um custo de DX que não aparece nos micro-cenários (LOC) mas aparece quando o fluxo cresce (5+ steps, múltiplos serviços) — o reviewer precisa de ferramentas externas (diagramas, traces) para validar coerência da cadeia. Step Functions tem segurança de deploy excelente mas verbosidade de ASL pesa em fluxos médios.
+**Conclusão:** Temporal e RabbitMQ orquestrado têm **DX equivalente em mudanças aditivas**, mas Temporal vence claramente em **mudanças que reordenam ou removem steps** porque o engine força tratamento de versionamento. RabbitMQ coreografado paga um custo de DX que não aparece nos micro-cenários (LOC) mas aparece quando o fluxo cresce (5+ steps, múltiplos serviços) — o reviewer precisa de ferramentas externas (diagramas, traces) para validar coerência da cadeia. Step Functions tem segurança de deploy excelente mas verbosidade de ASL pesa em fluxos médios.
 
 ---
 
-## 4. Sobre alertas e observabilidade (NOVO — pós-T2.2)
+## §3 Alertas e observabilidade
 
-A versão anterior deste documento sugeria que **Temporal entrega alertas grátis** enquanto **RabbitMQ exige construção significativa**. A implementação concreta no T2.2 mostrou que a diferença é mais matizada:
+Versões anteriores deste documento sugeriam que **Temporal entrega alertas grátis** enquanto **RabbitMQ exige construção significativa**. A implementação concreta no T2.2 mostrou que a diferença é mais matizada:
 
 **O que ficou parecido:**
 
@@ -659,7 +173,7 @@ Cada caminho é mais código + mais teste + mais chance de erro humano. Um alert
 
 ---
 
-## 5. Silent corruption sob mudança de código — o argumento mais forte (NOVO — pós-T5.1)
+## §4 Silent corruption sob mudança de código — o argumento mais forte
 
 T5.1 reproduziu o cenário comum de produção: **reordenar steps de uma saga durante deploy, enquanto sagas estão em voo.** Aplicações reais fazem isso ao otimizar fluxos, mudar regras de negócio ou refatorar pedidos.
 
@@ -708,14 +222,14 @@ Se um time se compromete a **NUNCA mudar a forma de uma saga depois que ela est�
 
 ---
 
-## 6. Custo de "memória de longo prazo" (NOVO — pós-T3.3)
+## §5 Custo de "memória de longo prazo"
 
 **T3.3** rodou 5 minutos × 10 sagas/s em ambos PoCs e revelou uma assimetria estrutural:
 
 - **RabbitMQ stack:** memória cresce ~20-30 MB durante load, **volta ao baseline** quando load termina. Mensagens são ackadas e removidas; SQLite tem rows leves; processos liberam RAM.
 - **Temporal stack:** memória cresce **+311 MB** durante load — Postgres acumula history events (cada workflow gera ~10 eventos), temporal server cacheia state, workers crescem ~50 MB cada. **Não volta ao baseline** ao fim do load.
 
-**Esse não é um leak — é storage de audit trail durável.** O Postgres do Temporal só limpa após o retention period configurado. **O default do `temporalio/auto-setup` é 24h** (verificado em 2026-05-04 — afirmações anteriores deste doc citando "7 dias" estavam incorretas e foram corrigidas). Para postmortem além de 24h, é necessário aumentar retention explicitamente ou exportar history events para storage frio.
+**Esse não é um leak — é storage de audit trail durável.** O Postgres do Temporal só limpa após o retention period configurado. **O default do `temporalio/auto-setup` é 24h** (verificado em 2026-05-04). Para postmortem além de 24h, é necessário aumentar retention explicitamente ou exportar history events para storage frio.
 
 **Implicações para a decisão:**
 
@@ -727,15 +241,13 @@ Se um time se compromete a **NUNCA mudar a forma de uma saga depois que ela est�
 
 - Volume estimado: 100 sagas/min × 60 × 24 × 30 = ~4.3M sagas/mês.
 - Cada saga gera ~10 events × ~500 bytes = ~5 KB de history.
-- 4.3M × 5 KB = **~21 GB/mês de history acumulada** no Postgres do Temporal (assumindo retention de 1 mês).
-- Com **retention default de 24h**: ~700 MB ativos a qualquer momento (4.3M sagas/mês ÷ 30 = 143k sagas/dia × 5 KB = 700 MB). Aurora Postgres lida sem esforço; **storage não é decisor** com retention curta.
+- Com **retention default de 24h**: ~700 MB ativos a qualquer momento (4.3M sagas/mês ÷ 30 = 143k sagas/dia × 5 KB). Aurora Postgres lida sem esforço; **storage não é decisor** com retention curta.
 - Para postmortem além de 24h, aumentar retention para 7d sobe storage ativo para ~5 GB; para 30d, ~21 GB. Trade-off explícito entre profundidade de postmortem e custo de storage.
-- Retention de 7 dias: ~5 GB ativos a qualquer momento. Aurora Postgres lida sem problema.
 - Em RabbitMQ, o equivalente para chegar à paridade de informação seria ~21 GB/mês em ELK ou Loki — ônus do time.
 
 ---
 
-## 7. Custo financeiro de Temporal Cloud em escala (NOVO — pós-T6.1)
+## §6 Custo financeiro de Temporal Cloud em escala
 
 T6.1 (estimativa, não executado por falta de credenciais Cloud) projetou o custo de Temporal Cloud para o volume agregado dos serviços avaliados:
 
@@ -755,28 +267,14 @@ Em comparação:
 
 - Cloud só faz sentido **durante adoção** (primeiros 6-12 meses), antes de o time ter expertise para self-host.
 - Para escala >10M actions/mês (qualquer um dos serviços, depois de adotado), **self-host é a opção financeiramente sensata**.
-- O custo de "operar Temporal self-host" não é trivial — Helm chart oficial existe, mas operar Postgres + indexação ES + 4 serviços é trabalho de SRE. Vide §2.2.5 ("Self-hosting é não-trivial") e §2.2.6 (incompatibilidade MariaDB).
-- O argumento "Cloud reduz overhead inicial" do §2.1.7 continua válido — mas a saída Cloud → self-host depois é re-aponte de namespace + reconstrução de runbooks. Trabalho real, mas concentrado.
+- O custo de "operar Temporal self-host" não é trivial — Helm chart oficial existe, mas operar Postgres + indexação ES + 4 serviços é trabalho de SRE. Vide [`findings-temporal.md`](./findings-temporal.md) sobre incompatibilidade MariaDB e o segundo SGBD necessário.
+- O argumento "Cloud reduz overhead inicial" continua válido — mas a saída Cloud → self-host depois é re-aponte de namespace + reconstrução de runbooks. Trabalho real, mas concentrado.
 
 Esse cálculo deve entrar na decisão final como **TCO de 12-24 meses**, não como "Cloud é caro abstratamente".
 
 ---
 
-## 8. O que ainda só vai ficar claro depois do PoC Temporal completo
-
-- LOC reais de saga + activities + workers (vs 632 do RabbitMQ).
-- Tempo de onboarding de um dev Laravel para escrever primeiro workflow (em dias).
-- Frequência de erros de determinismo durante desenvolvimento.
-- Comportamento real durante deploy mid-flight (rolling restart de workers).
-- Cenários de resiliência simétricos aos rodados em RabbitMQ.
-- Custo Cloud projetado no volume real esperado.
-- DX de code review na prática (uma coisa é a teoria, outra é dois reviewers olhando código real).
-
-Esses números fecham a tabela §3.2 da [`recomendacao-saga.md`](./recomendacao-saga.md) para o lado Temporal. Aí a recomendação pode sair do "em aberto" para "fechada com evidência".
-
----
-
-## 8.0 Saga Aggregator — plano técnico para coreografia operacional (NOVO — 2026-05-04)
+## §7 Saga Aggregator — plano técnico para coreografia operacional
 
 A maior fraqueza do modelo coreografado documentada neste estudo é **observabilidade**: cada serviço tem seu `step_log` local (SQLite/MariaDB), e não há "lista de sagas" centralizada como o Temporal Web entrega gratuitamente. Em produção real, o postmortem distribuído é arrasador (já documentado em T3.4).
 
@@ -784,7 +282,7 @@ A solução madura é construir um **Saga Aggregator** — um microsserviço ded
 
 Este plano técnico descreve o que precisa ser construído. **Não foi implementado nesta iteração** porque é trabalho de ~5-7 dias eng — registrá-lo aqui é parte da honestidade do estudo: defender coreografia exige assumir o custo de operacionalizá-la com observabilidade aceitável.
 
-### 8.0.1 Arquitetura proposta
+### §7.1 Arquitetura proposta
 
 ```
 serviços (service-a, service-b, service-c, …)
@@ -808,7 +306,7 @@ serviços (service-a, service-b, service-c, …)
    UI Filament/Livewire (read-only) para postmortem
 ```
 
-### 8.0.2 Schema da `saga_view`
+### §7.2 Schema da `saga_view`
 
 Tabela única, otimizada pra leitura. Cada row é uma saga; payload de eventos vai num campo JSON.
 
@@ -830,7 +328,7 @@ CREATE TABLE saga_view (
 );
 ```
 
-### 8.0.3 Lógica do consumer
+### §7.3 Lógica do consumer
 
 Um único consumer Laravel (ou worker simples PHP) ouvindo `saga.#` (topic wildcard) faz:
 
@@ -841,7 +339,7 @@ Um único consumer Laravel (ou worker simples PHP) ouvindo `saga.#` (topic wildc
    - Evento terminal (`saga.completed`/`saga.compensated`/`saga.failed`): atualiza `status`, `finished_at`, `failure_reason` se aplicável.
 3. Idempotência: chave composta `(saga_id, event_name, timestamp)` no array — duplicatas detectáveis.
 
-### 8.0.4 UI de postmortem
+### §7.4 UI de postmortem
 
 Filament admin panel sobre `saga_view`:
 
@@ -850,7 +348,7 @@ Filament admin panel sobre `saga_view`:
 - **Ações:** retry manual (republica `saga.started` com mesmo `saga_id` + payload original), abort (publica `saga.aborted`).
 - **Métricas agregadas:** % completas/compensadas/falhas última hora, p50/p95/p99 de duração por `saga_type`.
 
-### 8.0.5 Custos estimados
+### §7.5 Custos estimados
 
 | Componente                                    | Custo eng        | Custo operacional                   |
 | --------------------------------------------- | ---------------- | ----------------------------------- |
@@ -862,21 +360,21 @@ Filament admin panel sobre `saga_view`:
 | **Total inicial**                             | **~6 dias**      | -                                   |
 | Manutenção recorrente                         | ~0.5 dia/mês     | $30-50/mês de banco/container       |
 
-### 8.0.6 Quando construir o Saga Aggregator
+### §7.6 Quando construir o Saga Aggregator
 
 - **Antes** de adotar coreografia em produção. Sem ele, postmortem é doloroso e custoso (T3.4 mostrou 2-15 min por incidente real).
 - **Depois** se a expectativa é volume baixo (≤ 100 sagas/dia) e o time é pequeno — nesse caso, postmortem manual via grep nos logs é suficiente.
 
-### 8.0.7 Trade-off explícito vs Temporal
+### §7.7 Trade-off explícito vs Temporal
 
 Construir o Saga Aggregator é **recriar parte do que o Temporal entrega de graça** (lista de workflows, drill-down, retry). A diferença é:
 
 | Aspecto                               | Saga Aggregator (caseiro)        | Temporal Web                      |
 | ------------------------------------- | -------------------------------- | --------------------------------- |
 | Custo inicial                         | ~6 dias eng                      | $0 (vem com Temporal)             |
-| Replay determinístico                 | ❌ não há                        | ✅ nativo                         |
-| Auditoria de payload entrada/saída    | ✅ se publicado nos eventos      | ✅ nativo                         |
-| Visualização gráfica do fluxo         | ❌ tabela + JSON                 | ✅ timeline gráfica nativa        |
+| Replay determinístico                 | não há                           | nativo                            |
+| Auditoria de payload entrada/saída    | sim, se publicado nos eventos    | nativo                            |
+| Visualização gráfica do fluxo         | tabela + JSON                    | timeline gráfica nativa           |
 | Custo de manter                       | ~0.5 dia/mês                     | $0 (Temporal mantém)              |
 | Lock-in                               | nenhum                           | médio (Temporal-specific)         |
 
@@ -884,7 +382,7 @@ Construir o Saga Aggregator é **recriar parte do que o Temporal entrega de gra�
 
 ---
 
-## 8.1 TCO em 3 cenários — números concretos (NOVO — 2026-05-04)
+## §8 TCO em 3 cenários
 
 A discussão de custo até aqui ficou em prosa ("~3 dias eng", "~$30-150/mês", "$58k/ano em escala"). Esta seção modela 3 cenários de volume e calcula TCO 12 meses para cada combinação relevante de modelo+ferramenta. **Premissas comuns:** ambiente AWS, equipe com expertise prévia em PHP/MariaDB/Laravel, custo de eng ~$80/h ou ~$640/dia, 1 ano de horizonte.
 
@@ -955,13 +453,13 @@ Caso de marketplaces grandes ou backbones críticos.
 
 ---
 
-## 9. Ângulo que pode mudar tudo
+## §9 Ângulo que pode mudar tudo
 
 **Pergunta concreta que vale registrar antes de fechar:**
 
 > Com que frequência se espera mudar a **forma** de uma saga (adicionar step no meio, reordenar, mudar compensação) vs mudar **regras de negócio dentro dos passos**?
 
-- Se **a forma muda raramente** (típico): os 6 contras acima do versionamento Temporal somem na prática. Mudanças de regra de negócio vivem em Activities, que são PHP comum, e podem ser deployadas sem `getVersion()`.
+- Se **a forma muda raramente** (típico): os contras de versionamento Temporal somem na prática. Mudanças de regra de negócio vivem em Activities, que são PHP comum, e podem ser deployadas sem `getVersion()`.
 - Se **a forma muda toda semana** (atípico, mas possível em ambiente experimental): o custo de versionamento Temporal vira fricção real. Mas isso sinaliza que a saga não é uma abstração estável — e o problema vai existir em qualquer orquestrador (RabbitMQ+lib idem, só que escondido).
 
-A resposta calibra o peso desse critério no comparativo final.
+A resposta calibra o peso desse critério no comparativo final — e é o ângulo que mais pode mudar a recomendação de ferramenta para um cenário concreto.

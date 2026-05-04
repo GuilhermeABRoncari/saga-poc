@@ -1,195 +1,118 @@
-# Estudo: SAGA para Microsserviços
+# Estudo de SAGA: introdução técnica
 
-> Estudo iniciado em 24/04/2026.
-
-## Objetivo
-
-Avaliar ferramentas para orquestração genérica de workflows entre microsserviços. O foco não é resolver um fluxo específico isolado, mas escolher uma infraestrutura geral capaz de coordenar workflows multi-serviço com compensação consistente em vários domínios da plataforma.
-
-## Decisões tomadas
-
-- **Infra futura**: Migração para Kubernetes considerada como cenário provável (ver §1.1 de `recomendacao-saga.md` para premissas atualizadas — migração gradual, possivelmente com período híbrido entre Docker Swarm e Kubernetes).
-- **Abordagem**: PoC mínimo por ferramenta com workflow de 3 passos com compensação LIFO.
-- **AWS Step Functions descartado inicialmente, reaberto em 2026-04-29**: o foco original foi RabbitMQ + lib interna e Temporal. Após a decisão preliminar pró-Temporal, optamos por executar uma 3ª PoC (`saga-step-functions/`) em LocalStack para fechar a comparação 3-way. Resultado em [`findings-step-functions.md`](./findings-step-functions.md): Step Functions adiciona "zero-ops" como atrativo, mas perde nos critérios qualitativos críticos (correção sob mudança de código, latência, lock-in).
-- **Organização**: Diretórios isolados (`saga-rabbitmq/`, `saga-temporal/`, `saga-rabbitmq-coreografado/`, `saga-step-functions/`) em repositório dedicado de estudo.
-
-## Arquitetura de referência considerada
-
-- Stack PHP/Laravel com múltiplos serviços comunicando-se por HTTP M2M e filas.
-- Comunicação de fundo: filas (SQS/ElasticMQ ou broker AMQP).
-- Possível camada de federação GraphQL no topo.
-- Sem saga explícito hoje — jobs disparam outros jobs sem compensação automática, padrão a ser superado.
+> Documento de entrada do estudo. Resume o problema, o ambiente alvo, os critérios e as ferramentas que foram comparadas. Para a definição do padrão e dos modelos (orquestração/coreografia), ver [`compreensao-saga.md`](./compreensao-saga.md). Para terminologia, ver [`glossario.md`](./glossario.md). Para a recomendação consolidada, ver [`recomendacao-saga.md`](./recomendacao-saga.md).
 
 ---
 
-## Comparação: RabbitMQ vs Temporal
+## 1. Por que esse estudo existe
 
-| Aspecto                            | RabbitMQ + Laravel                                                         | Temporal                                              |
-| ---------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------- |
-| **O que é**                        | Message transport (a saga é construída por cima)                           | Durable execution engine (saga built-in)              |
-| **Compensação**                    | 100% custom (state machine + DB table)                                     | First-class: `Workflow\Saga` com LIFO automático      |
-| **Legibilidade do workflow**       | Implícito (switch/events entre serviços)                                   | Explícito (código sequencial com `yield`)             |
-| **Observabilidade de saga**        | Custom (query DB + logs)                                                   | Temporal Web UI (timeline completa por workflow)      |
-| **PHP ecosystem**                  | Maduro para transport (9.4M installs)                                      | SDK funcional mas 2ª classe (384 stars)               |
-| **Runtime extra**                  | Nenhum (Laravel queues padrão)                                             | RoadRunner obrigatório para Workers                   |
-| **Curva de aprendizado**           | Baixa no transport, alta no saga pattern                                   | Alta (yield, determinismo, RoadRunner)                |
-| **Self-hosting Swarm**             | Possível mas doloroso (clustering)                                         | Não suportado oficialmente                            |
-| **K8s**                            | Helm charts maduros                                                        | Helm charts oficiais                                  |
-| **Managed option**                 | CloudAMQP (~$20-100/mês)                                                   | Temporal Cloud (~$100-200/mês)                        |
-| **O que é construído pelo time**   | Tudo: state machine, outbox, DLQ handler, compensação, idempotência, retry | Activities + Workflow definition. Infra é do Temporal |
-| **Deploy com workflows in-flight** | Sem restrição                                                              | Requer `Workflow::getVersion()` (determinismo)        |
+Em arquiteturas com múltiplos serviços, operações de negócio frequentemente atravessam mais de um recurso transacional (banco próprio do serviço A, banco do serviço B, sistema externo C). Não há transação ACID que cubra essa fronteira; o caminho viável é o padrão **SAGA** — sequência de transações locais com **compensação semântica** em caso de falha.
+
+O estudo não busca resolver um fluxo de negócio específico. O objetivo é avaliar **infraestrutura genérica** para coordenar workflows multi-serviço com compensação consistente, aplicável a vários domínios (pedidos, pagamentos, estoque, logística etc.).
+
+Hoje, na arquitetura de partida:
+
+- Serviços PHP/Laravel se comunicam por HTTP M2M e por filas.
+- Não há padrão explícito de SAGA: jobs disparam outros jobs, sem orquestração central nem compensação automática.
+- Falhas parciais costumam ser tratadas ad-hoc (status manual, reprocesso manual, retries via `failed()`).
+
+A pergunta do estudo: **qual é a melhor opção de plataforma/padrão para introduzir SAGA de forma sistemática nesta organização?**
 
 ---
 
-## Pesquisa: RabbitMQ + Laravel
+## 2. Premissas do ambiente alvo
 
-### O que RabbitMQ fornece
+As premissas abaixo foram congeladas no início e revisitadas durante o estudo. São o filtro que separa "tecnicamente possível" de "viável aqui".
 
-- Filas duráveis, exchanges, DLX, publisher confirms, consumer acks, management UI.
+### 2.1 Stack atual
 
-### O que RabbitMQ NÃO fornece
+- PHP 8.x + Laravel nos serviços.
+- Comunicação síncrona: HTTP M2M; em alguns trechos, GraphQL na borda.
+- Comunicação assíncrona: filas (SQS/ElasticMQ ou broker AMQP).
+- Bancos: SQL (Postgres/MySQL/MariaDB) por serviço; nenhum compartilhado.
 
-- Saga state persistence, sequenciamento de steps, compensação, retry com backoff, correlation/tracing.
+### 2.2 Infra futura — migração gradual
 
-### PHP/Laravel Ecosystem
+A premissa de infra é **migração para Kubernetes (EKS) gradual, não em bloco**. Existe a expectativa de um período híbrido — Docker Swarm + EKS — por tempo indeterminado. Critérios são avaliados nesse contexto: uma plataforma que só seja viável em K8s nativo não é descartada, mas paga o preço de só estar disponível para os serviços que já migraram.
 
-- **`vladimir-yuldashev/laravel-queue-rabbitmq`** — padrão de facto (9.4M installs, v14.4, Laravel 12).
-- **`vandarpay/orchestration-saga`** — único pacote de saga, mas 6 installs, 2 stars. NÃO production-ready.
-- **Conclusão**: Não existe framework de saga maduro para PHP. Tudo é código custom.
+### 2.3 Volume e escala
 
-### O que precisa ser construído
+- Workflows de poucas dezenas de passos no máximo (não pipelines de big data).
+- Latência típica aceitável de segundos para minutos por saga (não real-time).
+- Volume da ordem de milhares a dezenas de milhares de sagas por dia, com picos.
+- Persistência de longo prazo de history não é requisito (auditoria operacional sim, retenção indefinida não).
 
-- `SagaOrchestrator` (state machine).
-- Tabela `saga_state` (id, type, current_step, payload, status).
-- Tabela `outbox_messages` (transactional outbox — obrigatório).
-- `SagaStateRepository`.
-- Comandos de compensação por step.
-- DLQ monitoring/alerting.
+### 2.4 Restrições de time
 
-### Operacional
-
-- Swarm: clustering doloroso (hostname pinning, volume constraints, peer discovery).
-- Quorum Queues obrigatórias no RabbitMQ 4.0+ (mirrored queues removidas).
-- Mínimo 3 nodes para HA real.
-- Recursos: 4GB RAM + 4 cores por node (produção).
-- Monitoring: Management UI + Prometheus/Grafana.
-
-### Pros
-
-- Maduro (18+ anos), battle-tested.
-- Excelente integração Laravel.
-- Baixa curva de aprendizado no transport layer.
-- Self-hosted, controle total.
-
-### Contras
-
-- Sem framework de saga — tudo custom.
-- Sem workflow visualization.
-- Idempotência manual em tudo.
-- Clustering em Swarm é doloroso.
-- PHP ecosystem fino para saga.
-- DX inferior a workflow engines dedicadas.
+- Time confortável com PHP/Laravel; baixa exposição a Go/Java.
+- Pouca experiência prévia com workflow engines dedicadas.
+- Operação de infra centralizada em poucas pessoas — qualquer aumento de superfície operacional pesa.
 
 ---
 
-## Pesquisa: Temporal
+## 3. Critérios de avaliação
 
-### O que Temporal é
+A tabela completa fica em [`recomendacao-saga.md`](./recomendacao-saga.md) §3.2. Em resumo, cada PoC é avaliada sob:
 
-- Durable execution engine — workflow roda até completar mesmo com crashes.
-- Event-sourcing de cada Workflow execution.
-- Três primitivas: Workflow (orchestrator, determinístico), Activity (I/O real), Worker (processo que executa).
+- **Correção** — happy path, falha em cada step, compensação LIFO, idempotência sob retry.
+- **DX** — LOC para o mesmo workflow, legibilidade, facilidade de debug local.
+- **Observabilidade** — capacidade de reconstruir o que aconteceu em uma saga arbitrária.
+- **Operação** — esforço de deploy, requisitos de runtime extras, custo de infra (self-host e managed).
+- **Resiliência** — comportamento sob kill de worker mid-flight, deploy mid-flight, falha de broker, falha de banco.
+- **Volume de escritas no banco** — medido em INSERTs/UPDATEs por saga (relevante para custo de Aurora e para análise de impacto sob alto throughput).
+- **Lock-in** — quão fácil é trocar de tecnologia depois.
+- **Maturidade do ecossistema PHP** — qualidade do SDK, número de installs, atividade no GitHub.
 
-### PHP SDK
+---
 
-- **`temporal/sdk`** v2.17.1 (março 2026) — mantido ativamente.
-- 2.4M installs, 384 stars no GitHub.
-- Construído pela Spiral Scout (não pelo core team do Temporal).
-- **RoadRunner obrigatório** para Workers.
-- **`keepsuit/laravel-temporal`** — integração Laravel (50 stars), artisan commands, testing helpers.
+## 4. Ferramentas comparadas
 
-### Saga built-in
+Quatro PoCs foram implementadas neste repositório, em diretórios isolados. Todas executam o **mesmo workflow de referência de 3 passos com compensação LIFO** (`ReserveStock` → `ChargeCredit` → `ConfirmShipping`), descrito em [`compreensao-saga.md`](./compreensao-saga.md) §3.
 
-Forma do API (referência da documentação oficial do Temporal):
+| PoC                            | Diretório                       | Modelo                       | Findings                                       |
+| ------------------------------ | ------------------------------- | ---------------------------- | ---------------------------------------------- |
+| RabbitMQ + lib custom          | `saga-rabbitmq/`                | Orquestração                 | [`findings-rabbitmq.md`](./findings-rabbitmq.md) |
+| Temporal                       | `saga-temporal/`                | Orquestração (durable exec.) | [`findings-temporal.md`](./findings-temporal.md) |
+| AWS Step Functions (LocalStack)| `saga-step-functions/`          | Orquestração managed         | [`findings-step-functions.md`](./findings-step-functions.md) |
+| RabbitMQ coreografado          | `saga-rabbitmq-coreografado/`   | Coreografia (lib mínima)     | [`findings-rabbitmq-coreografado.md`](./findings-rabbitmq-coreografado.md) |
 
-```php
-$saga = new Workflow\Saga();
+A 4ª PoC (coreografada) foi adicionada após o estudo identificar que as três primeiras cobriam apenas orquestração — o padrão merecia uma avaliação simétrica antes de qualquer recomendação fechada.
 
-$orderId = yield $activities->processOrder();
-$saga->addCompensation(fn() => yield $activities->cancelOrder($orderId));
+### 4.1 O que cada PoC investiga
 
-$reservationId = yield $activities->reserveStock($orderId);
-$saga->addCompensation(fn() => yield $activities->releaseStock($reservationId));
+- **RabbitMQ + lib custom** — quanto código é necessário para construir saga em cima de transport puro (state machine, outbox, DLQ, compensação). Validar se "construir em cima do que já temos" é tratável.
+- **Temporal** — quanto se ganha em DX/observabilidade ao adotar uma engine dedicada de durable execution. Validar restrições de runtime (RoadRunner) e determinismo no contexto PHP.
+- **Step Functions** — avaliar a opção managed AWS, com foco em "zero-ops" e integração nativa com SQS/Lambda/EventBridge.
+- **RabbitMQ coreografado** — validar saga sem coordenador central, com lib mínima (<100 LOC), cada serviço dono do seu passo e da sua compensação. Foco em acoplamento mínimo e simplicidade operacional.
 
-// Se falhar, compensações rodam em LIFO automático:
-yield $saga->compensate();
+---
+
+## 5. Workflow de referência das PoCs
+
+Para que a comparação seja honesta, todas as PoCs implementam o mesmo workflow:
+
+```
+ReserveStock  →  ChargeCredit  →  ConfirmShipping
+   ↓ falha       ↓ falha          ↓ falha
+ReleaseStock  ←  RefundCredit  ←  CancelShipping
 ```
 
-### Restrições de determinismo (CRÍTICO)
+Cenários executados em todas as PoCs:
 
-- Workflow é replayed do zero no recovery — código DEVE ser determinístico.
-- PROIBIDO: `date()`, `time()`, `rand()`, `sleep()`, DB queries, HTTP calls, `echo`, `var_dump`.
-- ALTERNATIVAS: `Workflow::now()`, `Workflow::timer()`, `Workflow::sideEffect()`, Activity classes.
-- Workflow versioning com `Workflow::getVersion()` para deploys com workflows in-flight.
+1. **Happy path** — três passos completam, saga termina em `COMPLETED`.
+2. **Falha no step 2** — `ReleaseStock` é executado; saga termina em `COMPENSATED`.
+3. **Falha no step 3** — `RefundCredit` e depois `ReleaseStock` (LIFO); saga termina em `COMPENSATED`.
 
-### Operacional
-
-- 4 serviços internos: Frontend, History, Matching, Worker.
-- Persistence: PostgreSQL/MySQL 8/Cassandra + Elasticsearch (opcional). **MariaDB não suportado** — confirmado em 2026-05-04 (ver `findings-temporal.md` §2.2.6).
-- Docker Swarm NÃO suportado oficialmente — Kubernetes ou Temporal Cloud.
-- Dev local: `temporal server start-dev` (single binary, zero deps).
-- Temporal Cloud: Free tier → Essentials ~$100/mês → Growth ~$200/mês.
-
-### Pros
-
-- Durable execution out of the box.
-- SAGA compensation first-class.
-- Observabilidade excelente (Temporal Web UI).
-- Worker pull model (sem firewall inbound).
-- Temporal Cloud elimina ops burden.
-
-### Contras
-
-- RoadRunner obrigatório — runtime desconhecido para times acostumados a FPM.
-- `yield` syntax incomum.
-- Determinismo é uma restrição rígida.
-- PHP SDK segunda classe (384 stars vs milhares para Go/Java).
-- Self-hosting complexo, K8s recomendado.
-- `dd()`/`var_dump`/`echo` não funcionam dentro de Workflows.
+Falhas são injetadas via variável `FORCE_FAIL=step2|step3` para tornar os testes determinísticos.
 
 ---
 
-## PoC: Workflow de referência
+## 6. Documentos relacionados
 
-### Cenários de teste
-
-1. **Happy path**: Step 1 → Step 2 → Step 3 completam.
-2. **Falha no step 2**: Compensa step 1.
-3. **Falha no step 3**: Compensa steps 2 e 1 em ordem reversa.
-
-### Critérios de avaliação pós-PoC
-
-Ver `recomendacao-saga.md` §3.2 para a tabela completa de critérios congelada antes do PoC. Resumo:
-
-- LOC para o mesmo workflow.
-- Tempo de setup (`docker-compose up` → workflow rodando).
-- Legibilidade do workflow.
-- Facilidade de debug quando algo falha.
-- Recursos consumidos.
-- Esforço para atingir observabilidade aceitável.
-- Resiliência (kill de worker mid-flight, deploy mid-flight).
-
----
-
-## Estado atual
-
-- **saga-rabbitmq**: PoC funcional. Happy path e cenário de compensação validados ponta a ponta. Detalhes em `../saga-rabbitmq/README.md`.
-- **saga-temporal**: PoC funcional, com bateria de medições registrada em `findings-temporal.md`.
-- **saga-step-functions**: PoC executada em LocalStack para fechar a comparação 3-way; resultados em `findings-step-functions.md`.
-- **saga-rabbitmq-coreografado**: 4ª PoC, executada após o estudo identificar que coreografia merecia avaliação simétrica e não havia sido coberta pelas três primeiras.
-
-### Próximos passos
-
-1. Consolidar critérios faltantes da §3.2 nas PoCs já implementadas.
-2. Comparar lado a lado as quatro abordagens com base nos `findings-*.md`.
-3. Recomendação fechada baseada em evidência, atualizando o "em aberto" atual de `recomendacao-saga.md`.
+- [`compreensao-saga.md`](./compreensao-saga.md) — definição técnica do padrão SAGA, modelos (orquestração/coreografia), quando NÃO usar.
+- [`glossario.md`](./glossario.md) — siglas e termos.
+- [`recomendacao-saga.md`](./recomendacao-saga.md) — tabela de critérios congelada e recomendação consolidada.
+- [`consideracoes.md`](./consideracoes.md) — riscos, trade-offs e decisões transversais.
+- `findings-*.md` — relatórios das PoCs.
+- [`checklist-testes.md`](./checklist-testes.md) — bateria de testes executada em cada PoC.
+- [`fechamento.md`](./fechamento.md) — síntese final do estudo.

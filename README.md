@@ -1,44 +1,75 @@
 # saga-poc
 
-Estudo comparativo de ferramentas para implementar o **padrão SAGA** em arquiteturas distribuídas baseadas em PHP/Laravel. Este repositório agrupa quatro PoCs independentes que executam o mesmo workflow de referência sob estratégias e plataformas distintas, junto com a documentação analítica que sustenta a comparação.
+Estudo comparativo público do padrão **SAGA** em arquiteturas distribuídas baseadas em PHP/Laravel. Quatro PoCs independentes implementam o mesmo workflow de referência sob estratégias e plataformas diferentes, junto com a documentação analítica que sustenta a comparação. O objetivo do estudo nunca foi escolher uma "ferramenta vencedora" — foi mapear quando cada combinação ferramenta×modelo se justifica.
 
-## Documentação
+## Resumo executivo
 
-A parte conceitual e analítica vive em [`docs/`](./docs):
+A pergunta não é "qual ferramenta resolve um caso pontual?", mas **qual modelo + qual ferramenta servem como padrão sustentável** para múltiplos serviços que coordenam transações distribuídas. Para responder, congelamos critérios antes de implementar, executamos 20 testes Tier 1-6 contra cada PoC, e medimos número (não opinião): LOC, latência p50/p99, throughput, RAM idle, escritas no banco por saga, custo Cloud projetado em 12 meses.
 
-- [`docs/glossario.md`](./docs/glossario.md) — sumário de siglas e termos usados ao longo do estudo (PoC, SAGA, AMQP, ASL, etc.). Boa porta de entrada para quem encontra um termo desconhecido.
-- [`docs/estudo.md`](./docs/estudo.md) — pesquisa inicial: comparação RabbitMQ vs Temporal e o motivo pelo qual Step Functions foi reincorporado posteriormente como uma 3ª PoC.
-- [`docs/compreensao-saga.md`](./docs/compreensao-saga.md) — o que é SAGA na literatura, o que **não é**, e como exemplos concretos se encaixam no padrão.
-- [`docs/saga-rabbitmq-deep-dive.md`](./docs/saga-rabbitmq-deep-dive.md) — conceitos de AMQP/RabbitMQ + lições da PoC + lacunas para produção.
-- [`docs/recomendacao-saga.md`](./docs/recomendacao-saga.md) — estado atual da decisão + plano de PoC comparativo + critérios de avaliação.
-- [`docs/findings-rabbitmq.md`](./docs/findings-rabbitmq.md) — medições e observações da PoC RabbitMQ (preenche a tabela §3.2 da recomendação).
-- [`docs/findings-temporal.md`](./docs/findings-temporal.md) — medições simétricas da PoC Temporal + tabela final de comparação direta.
-- [`docs/findings-step-functions.md`](./docs/findings-step-functions.md) — medições simétricas da 3ª PoC (Step Functions via LocalStack).
-- [`docs/consideracoes.md`](./docs/consideracoes.md) — prós e contras detalhados por abordagem, com mitigações e o ponto-chave da "dialética Temporal vs Laravel".
-- [`docs/checklist-testes.md`](./docs/checklist-testes.md) — checklist de 20 testes comparativos Tier 1-6, com resultados anotados.
-- [`docs/fechamento.md`](./docs/fechamento.md) — síntese das baterias de teste e recomendação consolidada.
+A conclusão consolidada é uma **árvore de decisão**, não uma escolha única (detalhe em `docs/recomendacao-saga.md` §9.1):
 
-## Estrutura
+| Ferramenta × Modelo                | Latência p99 | Throughput | Vence quando…                                                                                                |
+| ---------------------------------- | ------------ | ---------- | ------------------------------------------------------------------------------------------------------------ |
+| RabbitMQ + lib **orquestrada**     | 23.8 ms      | ~46/s      | fluxo médio (4-7 steps), poucos serviços, time pequeno, sem requisito de audit trail estrito                  |
+| RabbitMQ + lib **coreografada**    | 20.4 ms      | ~94/s      | fluxo curto (≤3 steps), múltiplos squads desacoplados, requisito de latência baixa, throughput burst alto    |
+| **Temporal**                       | 351.2 ms     | ~7.4/s     | fluxo longo (8+ steps) ou aninhado, audit trail/replay obrigatório, deploys frequentes com sagas em voo      |
+| **AWS Step Functions**             | ~2092 ms*    | ~7.5/s     | já em stack AWS-native, free tier (≤4k transições/mês) suficiente, lock-in aceitável                          |
 
-- [`saga-rabbitmq/`](./saga-rabbitmq) — PoC com RabbitMQ + esboço de uma lib interna de saga orquestrada.
-- [`saga-temporal/`](./saga-temporal) — PoC com Temporal + esboço de wrapper Laravel para o SDK PHP do Temporal.
-- [`saga-rabbitmq-coreografado/`](./saga-rabbitmq-coreografado) — PoC com RabbitMQ no estilo coreografia (sem orquestrador central).
-- [`saga-step-functions/`](./saga-step-functions) — PoC com AWS Step Functions rodando em LocalStack + activity workers PHP em modo poll-based.
+*Step Functions medido em LocalStack — números absolutos não refletem AWS real, mas o ranking relativo se sustenta.
 
-Cada PoC implementa o **mesmo workflow de referência** (3 passos com compensação LIFO; o passo 3 falha intencionalmente para exercitar a reversão).
+Achados estruturais que não mudam conforme o cenário:
+
+- **Temporal × banco:** MariaDB **não suportado** (Multi-Valued Indexes, JSON path); MySQL 8 confirmado funcional empiricamente. Backends oficiais: PostgreSQL 12+, MySQL 8.0+, Cassandra 3.11+.
+- **RabbitMQ 4.3 (Khepri/Raft):** mirrored queues removidas; quorum queues são única opção HA suportada e custam **−25% de throughput** em single-node.
+- **Custo 12 meses:** RabbitMQ self-hosted ~$2.4-4.8k; Temporal Cloud em escala (~17M sagas/mês × 7 actions) ~$58k/ano.
+- **Escritas no banco por saga:** Temporal 38 INSERTs (happy) / 53 (com compensação); RabbitMQ orquestrado 1; coreografado 0 / 2.
+
+## Estrutura do repositório
+
+PoCs (cada uma roda o mesmo workflow de 3 passos com `FORCE_FAIL=step3` para exercitar reversão LIFO):
+
+- [`saga-rabbitmq/`](./saga-rabbitmq) — RabbitMQ + lib interna **orquestrada** (orchestrator central + `saga_states`).
+- [`saga-rabbitmq-coreografado/`](./saga-rabbitmq-coreografado) — RabbitMQ no estilo **coreografia**, sem orquestrador, lib mínima publicando `saga.failed` em fanout.
+- [`saga-temporal/`](./saga-temporal) — Temporal + RoadRunner + esboço de wrapper Laravel para o SDK PHP.
+- [`saga-step-functions/`](./saga-step-functions) — AWS Step Functions em LocalStack + activity workers PHP poll-based.
 
 ## Workflow de referência
 
-Workflow genérico de processamento de pedido, escolhido por ser um exemplo clássico da literatura SAGA e por exercitar de forma compacta os três comportamentos relevantes (commit local, compensação semântica, reversão em ordem inversa):
+| Step | Serviço         | Ação              | Compensação    |
+| ---- | --------------- | ----------------- | -------------- |
+| 1    | order-service   | `ReserveStock`    | `ReleaseStock` |
+| 2    | payment-service | `ChargeCredit`    | `RefundCredit` |
+| 3    | order-service   | `ConfirmShipping` | — (último)     |
 
-| Step | Serviço   | Ação              | Compensação      |
-| ---- | --------- | ----------------- | ---------------- |
-| 1    | service-a | `ReserveStock`    | `ReleaseStock`   |
-| 2    | service-b | `ChargeCredit`    | `RefundCredit`   |
-| 3    | service-a | `ConfirmShipping` | — (último passo) |
+Com `FORCE_FAIL=step3` o passo 3 falha → roda `RefundCredit` → `ReleaseStock` em ordem inversa.
 
-Com `FORCE_FAIL=step3` configurado no orquestrador (ou no produtor, no caso da coreografia), o passo 3 falha → a saga executa `RefundCredit` → `ReleaseStock` em ordem reversa (LIFO).
+## Documentação canônica
 
-## Como medir
+Documentos de **decisão**:
 
-Os critérios de avaliação foram congelados antes da implementação dos PoCs e estão consolidados em [`docs/recomendacao-saga.md`](./docs/recomendacao-saga.md) §3.2. Cada `findings-*.md` preenche a mesma tabela para permitir comparação direta lado a lado.
+- [`docs/recomendacao-saga.md`](./docs/recomendacao-saga.md) — recomendação consolidada como árvore de decisão por cenário (fluxo, time, infraestrutura, requisitos não-funcionais), tabela comparativa final das 4 combinações, scorecard, anti-padrões.
+- [`docs/consideracoes.md`](./docs/consideracoes.md) — prós e contras detalhados por ferramenta, incluindo §8.0 (Saga Aggregator) e §8.1 (TCO em 3 cenários de volume).
+
+Documentos de **medição**:
+
+- [`docs/findings-rabbitmq.md`](./docs/findings-rabbitmq.md) — medições da PoC RabbitMQ orquestrado, com revalidação em 4.3 + análise de quorum queues.
+- [`docs/findings-rabbitmq-coreografado.md`](./docs/findings-rabbitmq-coreografado.md) — medições da PoC coreografada (357 LOC final, latência, retry, reconnect).
+- [`docs/findings-temporal.md`](./docs/findings-temporal.md) — medições da PoC Temporal + achado MariaDB × MySQL 8.
+- [`docs/findings-step-functions.md`](./docs/findings-step-functions.md) — medições da PoC Step Functions/LocalStack.
+- [`docs/checklist-testes.md`](./docs/checklist-testes.md) — matriz dos 20 testes Tier 1-6 com resultados anotados.
+
+Documentos de **processo**:
+
+- [`docs/fechamento.md`](./docs/fechamento.md) — narrativa do estudo, iterações, decisões registradas (incluindo a 5ª PoC descartada).
+- [`docs/estudo.md`](./docs/estudo.md) — pesquisa inicial e como Step Functions foi reincorporado.
+- [`docs/glossario.md`](./docs/glossario.md) — siglas e termos.
+- [`docs/compreensao-saga.md`](./docs/compreensao-saga.md) — o que é SAGA na literatura, o que **não é**.
+- [`docs/saga-rabbitmq-deep-dive.md`](./docs/saga-rabbitmq-deep-dive.md) — fundamentos AMQP/RabbitMQ.
+
+Guias de **integração** (como adotar cada ferramenta na prática):
+
+- [`docs/integracao-rabbitmq.md`](./docs/integracao-rabbitmq.md), [`docs/integracao-temporal.md`](./docs/integracao-temporal.md), [`docs/integracao-step-functions.md`](./docs/integracao-step-functions.md).
+
+## Como reproduzir
+
+Cada PoC tem README próprio com setup, comandos para rodar happy path, simular falhas e coletar métricas. Os critérios de avaliação foram congelados antes da implementação e estão em `docs/recomendacao-saga.md` §3 — cada `findings-*.md` preenche a mesma matriz para permitir comparação direta lado a lado.
