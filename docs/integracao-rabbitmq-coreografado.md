@@ -32,11 +32,15 @@ Decisões de plataforma que precisam estar resolvidas antes de qualquer commit:
    │   ├── EventBus.php             # publish/subscribe AMQP + reconnect
    │   ├── SagaLog.php              # step_log + compensation_log no banco
    │   ├── SagaListener.php         # API fluente react()/compensate()/listen()
-   │   └── Console/RunWorkerCommand.php
+   │   ├── SagaDefinition.php       # contrato abstrato que cada saga da app implementa
+   │   ├── SagaRegistry.php         # coleta SagaDefinitions via container tag
+   │   └── Console/RunWorkerCommand.php  # genérico — itera o registry
    ├── config/saga.php
    └── database/migrations/
        └── xxxx_xx_xx_create_saga_log_tables.php
    ```
+
+   **Contrato lib ⇄ aplicação:** a lib não conhece os handlers da aplicação. Ela expõe `SagaDefinition` como classe abstrata; cada saga organizacional vira uma classe da aplicação que estende `SagaDefinition` e declara seus `react()`/`compensate()` num único método `register(SagaListener $listener)`. A aplicação registra essas classes via tag no container (`saga.definitions`); o `RunWorkerCommand` da lib resolve o `SagaRegistry`, itera as definições e delega a montagem do chain a cada uma.
 
 3. **Convenção de nomes de evento** combinada com o time:
    - Domínio: `<bounded-context>.<event>` (ex.: `stock.reserved`, `credit.charged`, `email.verified`).
@@ -71,36 +75,39 @@ Validação: `docker compose up rabbitmq` + abrir http://localhost:15672 (login 
 
 ---
 
-## Fase 2 — Imagem Docker do Laravel (1 dia)
+## Fase 2 — Service do worker no compose (1 dia)
 
-A imagem atual do `order-service` (php-fpm) não consegue rodar workers AMQP — falta a extensão `sockets` e o worker precisa ser long-running com loop próprio.
+A imagem atual do `order-service` herda de `php-fpm-base` (definida em `docker-compose.base.yml` do `mobilestock/backend`), que **já inclui as extensões `sockets` e `bcmath`** — pré-requisitos do `php-amqplib`. Não é preciso construir uma imagem nova nem adotar Dockerfile multi-stage: o worker é só **mais um service no compose** apontando pra mesma imagem base, com `command:` próprio.
 
-**Estratégia**: Dockerfile multi-stage com duas tags — `api` (php-fpm/nginx para HTTP) e `cli` (CLI long-running para workers).
+Esse é o padrão já em uso no monorepo para outros processos long-running do `lookpay-api-beta` (`lookpay-api-beta-queue-worker`, `lookpay-api-beta-process-pix-payments`, `lookpay-api-beta-process-pending-transfers`, etc.) — uma imagem por app, N services com `command:` distintos, cada um com sua `restart:` policy.
 
-`order-service/Dockerfile`:
+`docker-compose.development.yml` (ou equivalente do app):
 
-```dockerfile
-FROM php:8.3-fpm-alpine AS base
-RUN apk add --no-cache git unzip $PHPIZE_DEPS \
- && docker-php-ext-install sockets pdo_mysql bcmath \
- && apk del $PHPIZE_DEPS
-
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
-WORKDIR /app
-COPY composer.json composer.lock ./
-RUN composer install --no-interaction --prefer-dist --no-scripts --no-dev
-COPY . .
-RUN composer dump-autoload -o
-
-FROM base AS api
-RUN apk add --no-cache nginx supervisor
-CMD ["/usr/bin/supervisord"]
-
-FROM base AS cli
-CMD ["php", "artisan", "saga:listen"]
+```yaml
+order-service-saga-worker:
+  build:
+    dockerfile_inline: |
+      FROM ${COMPOSE_PROJECT_NAME}-php-fpm-base-development:latest
+  command: php artisan saga:listen
+  working_dir: /order-service
+  volumes:
+    - ./apps/order-service:/order-service
+    - ./apps/order-service/config/php.ini-development:/usr/local/etc/php/php.ini
+  environment:
+    <<: *order_service_envs
+  extra_hosts:
+    - 'host.docker.internal:host-gateway'
+  restart: always
+  depends_on:
+    - php-fpm-base-development
+    - rabbitmq
 ```
 
-CI publica `order-service:1.x.y-api` e `order-service:1.x.y-cli`.
+O service HTTP existente (`order-service`, php-fpm + nginx) permanece como está — mesma imagem, `command:` padrão. O worker compartilha código, configs, conexão de banco e `.env` por volume; só diverge no entrypoint.
+
+**Quando migrarem pra K8s/EKS**: o mesmo padrão se traduz em dois `Deployment`s apontando pra mesma `image:`, com `args:` diferentes (`["php", "artisan", "serve"]` vs `["php", "artisan", "saga:listen"]`). Não é preciso quebrar em duas tags no registry — escala, rollout, livenessProbe e HPA continuam independentes porque são objetos K8s distintos, não imagens distintas.
+
+> **Quando consideraria multi-stage `-api`/`-cli` separado**: se um dia API e worker precisarem de dependências de runtime conflitantes (ex.: worker exigindo extensão pesada que infla footprint da API, ou versões divergentes de uma extensão). Hoje não é o caso — `php-fpm-base` cobre os dois.
 
 ---
 
@@ -261,28 +268,103 @@ final class ReleaseStockCompensation
 }
 ```
 
-### 4.4 Wire-up no comando de worker
+### 4.4 Declarar a saga na aplicação
+
+A aplicação declara cada saga como uma classe que estende `SagaDefinition` (vinda da lib). Os handlers e compensações são injetados no construtor da definição — Laravel resolve via container automaticamente.
 
 ```php
-// vendor/acme/laravel-saga/src/Console/RunWorkerCommand.php (publicado)
-public function handle(EventBus $bus, SagaLog $log): int
+// app/Saga/Definitions/CreateOrderSaga.php
+namespace App\Saga\Definitions;
+
+use Acme\LaravelSaga\SagaDefinition;
+use Acme\LaravelSaga\SagaListener;
+use App\Saga\Handlers\ReserveStockHandler;
+use App\Saga\Handlers\ConfirmShippingHandler;
+use App\Saga\Handlers\ReleaseStockCompensation;
+
+final class CreateOrderSaga extends SagaDefinition
 {
-    (new SagaListener(config('saga.service_name'), $bus, $log))
-        ->react(
-            event: 'saga.started.create_order',
-            stepName: 'reserve_stock',
-            emit: 'stock.reserved',
-            handler: app(ReserveStockHandler::class),
-        )
-        ->react(
-            event: 'credit.charged',
-            stepName: 'confirm_shipping',
-            emit: 'saga.completed.create_order',
-            handler: app(ConfirmShippingHandler::class),
-        )
-        ->compensate('reserve_stock', app(ReleaseStockCompensation::class))
-        ->listen(config('saga.queue_name'));
-    return self::SUCCESS;
+    public function __construct(
+        private ReserveStockHandler $reserveStock,
+        private ConfirmShippingHandler $confirmShipping,
+        private ReleaseStockCompensation $releaseStock,
+    ) {}
+
+    public function register(SagaListener $listener): void
+    {
+        $listener
+            ->react(
+                event: 'saga.started.create_order',
+                stepName: 'reserve_stock',
+                emit: 'stock.reserved',
+                handler: $this->reserveStock,
+            )
+            ->react(
+                event: 'credit.charged',
+                stepName: 'confirm_shipping',
+                emit: 'saga.completed.create_order',
+                handler: $this->confirmShipping,
+            )
+            ->compensate('reserve_stock', $this->releaseStock);
+    }
+}
+```
+
+Registrar a definição no container via tag, em um ServiceProvider da aplicação:
+
+```php
+// app/Providers/SagaServiceProvider.php
+namespace App\Providers;
+
+use App\Saga\Definitions\CreateOrderSaga;
+use Illuminate\Support\ServiceProvider;
+
+final class SagaServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        $this->app->tag([
+            CreateOrderSaga::class,
+        ], 'saga.definitions');
+    }
+}
+```
+
+(Não esqueça de adicionar `App\Providers\SagaServiceProvider::class` ao array `providers` em `config/app.php`.)
+
+**O que a lib faz internamente** (não precisa ser tocado pela aplicação):
+
+```php
+// vendor/acme/laravel-saga/src/Console/RunWorkerCommand.php
+namespace Acme\LaravelSaga\Console;
+
+final class RunWorkerCommand extends Command
+{
+    protected $signature = 'saga:listen';
+
+    public function handle(EventBus $bus, SagaLog $log, SagaRegistry $registry): int
+    {
+        $listener = new SagaListener(config('saga.service_name'), $bus, $log);
+        foreach ($registry->all() as $definition) {
+            $definition->register($listener);
+        }
+        $listener->listen(config('saga.queue_name'));
+        return self::SUCCESS;
+    }
+}
+
+// vendor/acme/laravel-saga/src/SagaRegistry.php
+namespace Acme\LaravelSaga;
+
+final class SagaRegistry
+{
+    public function __construct(private Container $app) {}
+
+    /** @return iterable<SagaDefinition> */
+    public function all(): iterable
+    {
+        return $this->app->tagged('saga.definitions');
+    }
 }
 ```
 
@@ -290,39 +372,50 @@ Validação: rodar `php artisan saga:listen` em foreground + abrir Management UI
 
 ### 4.5 Múltiplas sagas no mesmo worker
 
-Um único worker do `order-service` pode participar de **N sagas distintas em paralelo** — basta encadear mais `react()` no `SagaListener`. Cada saga é um fluxo independente identificado pelo prefixo `saga.started.<flow>`, e instâncias concorrentes do mesmo fluxo são isoladas por `saga_id`:
+Um único worker do `order-service` pode participar de **N sagas distintas em paralelo** — basta criar mais classes `SagaDefinition` na aplicação e taggear todas. O command da lib continua o mesmo; ele itera o registry e cada definição se monta isoladamente.
+
+Adicionar uma segunda saga (devolução de pedido):
 
 ```php
-// vendor/acme/laravel-saga/src/Console/RunWorkerCommand.php
-public function handle(EventBus $bus, SagaLog $log): int
+// app/Saga/Definitions/RefundOrderSaga.php
+namespace App\Saga\Definitions;
+
+use Acme\LaravelSaga\SagaDefinition;
+use Acme\LaravelSaga\SagaListener;
+use App\Saga\Handlers\RestockItemsHandler;
+use App\Saga\Handlers\UnrestockItemsCompensation;
+
+final class RefundOrderSaga extends SagaDefinition
 {
-    (new SagaListener(config('saga.service_name'), $bus, $log))
-        // Saga A — criação de pedido
-        ->react(
-            event: 'saga.started.create_order',
-            stepName: 'reserve_stock',
-            emit: 'stock.reserved',
-            handler: app(ReserveStockHandler::class),
-        )
-        ->react(
-            event: 'credit.charged',
-            stepName: 'confirm_shipping',
-            emit: 'saga.completed.create_order',
-            handler: app(ConfirmShippingHandler::class),
-        )
-        ->compensate('reserve_stock', app(ReleaseStockCompensation::class))
+    public function __construct(
+        private RestockItemsHandler $restockItems,
+        private UnrestockItemsCompensation $unrestockItems,
+    ) {}
 
-        // Saga B — devolução de pedido (mesmo serviço, fluxo independente)
-        ->react(
-            event: 'saga.started.refund_order',
-            stepName: 'restock_items',
-            emit: 'items.restocked',
-            handler: app(RestockItemsHandler::class),
-        )
-        ->compensate('restock_items', app(UnrestockItemsCompensation::class))
+    public function register(SagaListener $listener): void
+    {
+        $listener
+            ->react(
+                event: 'saga.started.refund_order',
+                stepName: 'restock_items',
+                emit: 'items.restocked',
+                handler: $this->restockItems,
+            )
+            ->compensate('restock_items', $this->unrestockItems);
+    }
+}
+```
 
-        ->listen(config('saga.queue_name'));
-    return self::SUCCESS;
+Atualizar o `SagaServiceProvider` para taggear ambas:
+
+```php
+public function register(): void
+{
+    $this->app->tag([
+        CreateOrderSaga::class,
+        RefundOrderSaga::class,
+        // adicionar novas sagas aqui
+    ], 'saga.definitions');
 }
 ```
 
@@ -330,9 +423,9 @@ O que coexiste sem conflito:
 
 - **Mesma queue `order-service.saga`** recebe eventos de `create_order` e `refund_order` — o roteamento por `routing_key` no topic exchange separa.
 - **Mesmas tabelas `saga_step_log` / `saga_compensation_log`** servem aos dois fluxos — PK `(saga_id, step)` garante isolamento; não há colisão mesmo se ambos os fluxos tiverem um `step` chamado `reserve_stock`, porque `saga_id` difere.
-- **Workers continuam stateless** — adicionar uma 3ª saga é só mais um `->react()` no chain + deploy do worker; nenhuma mudança em broker, banco ou config.
+- **Workers continuam stateless** — adicionar uma 3ª saga é só mais uma classe `SagaDefinition` + entrada no `tag()` + deploy do worker; nenhuma mudança em broker, banco, config ou no command da lib.
 
-> **Limite prático:** quando o número de fluxos por serviço passa de ~5-6, a leitura do `RunWorkerCommand` degrada. Padrão recomendado: extrair cada saga para uma classe `App\Saga\Definitions\<Flow>SagaDefinition` que recebe o `SagaListener` e registra seus próprios `react()`/`compensate()`. O `RunWorkerCommand` vira um agregador.
+> **Por que uma classe por saga, não tudo num lugar só:** mantém cada fluxo isolado, testável (você instancia a `SagaDefinition` com mocks dos handlers e verifica os `react()`/`compensate()` chamados), e evita um command monolítico que cresce indefinidamente. A lib não precisa saber quantas sagas existem — só itera o que estiver tagueado.
 
 ---
 
@@ -351,23 +444,43 @@ SAGA_SERVICE_NAME=payment-service
 SAGA_QUEUE=payment-service.saga
 ```
 
-Wire-up dos handlers do `payment-service`:
+No `payment-service`, declara-se uma `SagaDefinition` que registra apenas o passo de cobrança da saga `create_order` — o `payment-service` não conhece a topologia inteira, só os eventos que ele escuta e emite:
 
 ```php
-(new SagaListener('payment-service', $bus, $log))
-    ->react(
-        event: 'stock.reserved',
-        stepName: 'charge_credit',
-        emit: 'credit.charged',
-        handler: app(ChargeCreditHandler::class),
-    )
-    ->compensate('charge_credit', app(RefundCreditCompensation::class))
-    ->listen('payment-service.saga');
+// payment-service/app/Saga/Definitions/CreateOrderPaymentSaga.php
+namespace App\Saga\Definitions;
+
+use Acme\LaravelSaga\SagaDefinition;
+use Acme\LaravelSaga\SagaListener;
+use App\Saga\Handlers\ChargeCreditHandler;
+use App\Saga\Handlers\RefundCreditCompensation;
+
+final class CreateOrderPaymentSaga extends SagaDefinition
+{
+    public function __construct(
+        private ChargeCreditHandler $chargeCredit,
+        private RefundCreditCompensation $refundCredit,
+    ) {}
+
+    public function register(SagaListener $listener): void
+    {
+        $listener
+            ->react(
+                event: 'stock.reserved',
+                stepName: 'charge_credit',
+                emit: 'credit.charged',
+                handler: $this->chargeCredit,
+            )
+            ->compensate('charge_credit', $this->refundCredit);
+    }
+}
 ```
+
+Tagueada no `SagaServiceProvider` do `payment-service` exatamente como no `order-service` (mesma string `saga.definitions`, mesma lib).
 
 > **Acoplamento por convenção, não por tipo:** os nomes de evento (`stock.reserved`, `credit.charged`) são contratos implícitos entre serviços. Para reduzir risco de quebra silenciosa, recomenda-se adicionalmente um pacote `acme/saga-contracts` com **PHP DTOs versionados** compartilhados via Composer (mesma lógica do orquestrado, ver `integracao-rabbitmq.md` Fase 7).
 
-> **Cada serviço, sua queue, suas N sagas:** a convenção `<service>.saga` (ex.: `order-service.saga`, `payment-service.saga`, `<outro>.saga`) garante que cada app tenha sua queue durável independente — falha de um worker não afeta o backlog dos outros. Dentro de cada queue, o serviço participa de **quantos `<flow>`s precisar** sem nova infra: basta adicionar `react()` no chain (Fase 4.5). Em monorepo PHP/Laravel com múltiplos apps, isso significa que cada app tem 1 worker daemon, mas pode ser citado em N sagas organizacionais — não há limite estrutural.
+> **Cada serviço, sua queue, suas N sagas:** a convenção `<service>.saga` (ex.: `order-service.saga`, `payment-service.saga`, `<outro>.saga`) garante que cada app tenha sua queue durável independente — falha de um worker não afeta o backlog dos outros. Dentro de cada queue, o serviço participa de **quantos `<flow>`s precisar** sem nova infra: basta adicionar mais uma `SagaDefinition` ao tag `saga.definitions` (Fase 4.5). Em monorepo PHP/Laravel com múltiplos apps, isso significa que cada app tem 1 worker daemon, mas pode ser citado em N sagas organizacionais — não há limite estrutural.
 
 ---
 
@@ -440,7 +553,7 @@ Para cada fluxo síncrono que vira saga:
 2. **Defina contratos de evento.** `<context>.<event>` para sucesso, exception lançada para falha (a lib publica `saga.failed` automaticamente).
 3. **Implemente os handlers em cada serviço dono do contexto.** Idempotência local: cada handler precisa ser seguro a ser executado duas vezes com o mesmo `sagaId`.
 4. **Implemente as compensações.** Idem idempotência. A lib trata dedup via `compensation_log`, mas o efeito do handler precisa ser idempotente também.
-5. **Adicione novos `react()` ao worker** sem reiniciar o broker — basta restart do container worker, queues durável retêm mensagens em voo.
+5. **Adicione uma nova `SagaDefinition`** em `app/Saga/Definitions/` e registre-a no tag `saga.definitions` do `SagaServiceProvider`. Sem reiniciar o broker — basta restart do container worker; queues duráveis retêm mensagens em voo.
 6. **Sunset do código síncrono.** Manter feature flag por algumas semanas para alternar entre síncrono e saga durante transição.
 
 **Não tente migrar fluxos com 8+ steps de uma vez.** A lib coreografada favorece fluxos curtos (≤ 3-4 steps); fluxos longos viram spaghetti de eventos. Para esses, considere alternativas — orquestração centralizada (v2 da lib, se vier) ou ferramenta dedicada (Temporal). Discussão completa em [`recomendacao-saga.md`](./recomendacao-saga.md) §4.
@@ -453,7 +566,7 @@ Para cada fluxo síncrono que vira saga:
 | -------------------------------------------------------- | ---------------- |
 | 0 — Pré-requisitos (RabbitMQ + lib esqueleto)            | 1-2              |
 | 1 — Infra Compose local                                  | 1                |
-| 2 — Dockerfile multi-stage api/cli                       | 1                |
+| 2 — Service do worker no compose (mesma imagem base)     | 1                |
 | 3 — Instalação no `order-service` + migrations           | 1                |
 | 4 — Refatorar primeiro fluxo para coreografia            | 2-3              |
 | 5 — Replicar no `payment-service`                        | 1                |
@@ -473,7 +586,7 @@ Para cada fluxo síncrono que vira saga:
 - [ ] RabbitMQ 4.3+ provisionado em dev/staging/prod.
 - [ ] Convenção de nomes de evento documentada e revisada com squads.
 - [ ] Migrations `saga_step_log` e `saga_compensation_log` aplicadas no banco de cada serviço participante.
-- [ ] Dockerfile multi-stage publicando tags `-api` e `-cli`.
+- [ ] Service `*-saga-worker` declarado no compose (dev) e Deployment correspondente em K8s/EKS, ambos reaproveitando a imagem do app com `command:`/`args:` `php artisan saga:listen`.
 - [ ] Manifests K8s para workers (Deployment + secrets + livenessProbe).
 - [ ] **Idempotência validada nos handlers** — teste explícito de "rodar duas vezes com mesmo `sagaId` produz mesmo efeito".
 - [ ] **Idempotência validada nas compensações** — idem.
