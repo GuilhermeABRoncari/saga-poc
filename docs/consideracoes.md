@@ -59,7 +59,7 @@ Os 5 pontos que mais pesam, condensados (detalhe completo em [`findings-rabbitmq
 
 1. **Continuidade com a stack existente** — sem runtime novo, sem `yield`, sem determinismo. Code review entra na rotina.
 2. **Throughput e footprint enxutos** — 142 sagas/s burst (T1.3), p99 de 22ms sequencial (T6.2), ~137 MiB idle, ~10s cold start.
-3. **Tudo o que não é transport, você constrói** — state machine, idempotência, outbox, DLX, resume on boot, observabilidade. Custo agregado pré-produção: ~17-23 dias de eng inicial + manutenção recorrente.
+3. **Tudo o que não é transport, você constrói** — state machine, idempotência, outbox, DLX, resume on boot, observabilidade. Cada um desses é um componente próprio a manter, mais a manutenção recorrente; o que outras ferramentas entregam pronto, aqui é construção e teste interno.
 4. **Silent corruption sob reordenamento de step** (T5.1) — saga marcada COMPLETED com state inconsistente, sem alerta, sem panic. É o argumento mais cético do estudo (ver §4).
 5. **Lib atual mente sobre estado de compensação** (T2.3) — orchestrator marca COMPENSATED em 103ms enquanto handlers ainda dormem 3s. Bloqueante para produção; mitigação ~25 LOC.
 
@@ -235,7 +235,7 @@ Se um time se compromete a **NUNCA mudar a forma de uma saga depois que ela est�
 
 - Em **RabbitMQ**, "lembrar" custa zero em memória, mas custa caro em postmortem futuro (porque não lembrou do que importava).
 - Em **Temporal**, "lembrar" custa RAM e disco previsivelmente lineares com volume, mas paga em postmortem grátis depois.
-- Se o time não vai investigar incidentes além de "deu erro? rerun", RabbitMQ é mais barato. Se o time vai querer entender por que `chargeCredit` recebeu valor X em saga `1234` há 3 dias, Temporal já tem a resposta. RabbitMQ exigiria ELK + dashboards + persistência de payloads — custo cumulativo.
+- Se o time não vai investigar incidentes além de "deu erro? rerun", RabbitMQ é mais barato. Se o time vai querer entender por que `chargeCredit` recebeu valor X em uma saga ocorrida no passado, Temporal já tem a resposta. RabbitMQ exigiria ELK + dashboards + persistência de payloads — custo cumulativo de componentes a manter.
 
 **Cálculo grosseiro de retenção (volume agregado dos serviços avaliados):**
 
@@ -257,20 +257,20 @@ T6.1 (estimativa, não executado por falta de credenciais Cloud) projetou o cust
 - Tier "Essentials" (~$100/mês) cobre 10M actions; acima disso é **~$0.04 por 1000 actions**.
 - Cálculo grosseiro: 120M × $0.04/1000 = **~$4800/mês ≈ $58k/ano**.
 
-Em comparação:
+Em comparação (custos recorrentes de infra/SaaS apenas — eng não é parametrizado aqui):
 
-- **RabbitMQ self-hosted:** $200-400/mês (3 nodes) + ~17-23 dias eng inicial + manutenção recorrente.
-- **Temporal Cloud Essentials/Growth:** $58k/ano. Inviável em escala.
-- **Temporal self-host Kubernetes:** $250-500/mês (Aurora + nodes) + ~15 dias eng inicial + ~1-2 dias eng/mês de operação. Aproximadamente $3-6k/ano + tempo de operação.
+- **RabbitMQ self-hosted:** $200-400/mês (3 nodes), mais manutenção recorrente da lib interna.
+- **Temporal Cloud Essentials/Growth:** ~$4.8k/mês ≈ $58k/ano em escala. Inviável em escala.
+- **Temporal self-host Kubernetes:** $250-500/mês (Aurora + nodes). Aproximadamente $3-6k/ano de infra + carga operacional contínua de SRE.
 
 **Conclusão prática:**
 
-- Cloud só faz sentido **durante adoção** (primeiros 6-12 meses), antes de o time ter expertise para self-host.
+- Cloud só faz sentido **durante adoção**, antes de o time ter expertise para self-host.
 - Para escala >10M actions/mês (qualquer um dos serviços, depois de adotado), **self-host é a opção financeiramente sensata**.
 - O custo de "operar Temporal self-host" não é trivial — Helm chart oficial existe, mas operar Postgres + indexação ES + 4 serviços é trabalho de SRE. Vide [`findings-temporal.md`](./findings-temporal.md) sobre incompatibilidade MariaDB e o segundo SGBD necessário.
 - O argumento "Cloud reduz overhead inicial" continua válido — mas a saída Cloud → self-host depois é re-aponte de namespace + reconstrução de runbooks. Trabalho real, mas concentrado.
 
-Esse cálculo deve entrar na decisão final como **TCO de 12-24 meses**, não como "Cloud é caro abstratamente".
+Esse cálculo deve entrar na decisão final como **TCO recorrente em 12-24 meses (infra/SaaS)**, não como "Cloud é caro abstratamente".
 
 ---
 
@@ -280,7 +280,7 @@ A maior fraqueza do modelo coreografado documentada neste estudo é **observabil
 
 A solução madura é construir um **Saga Aggregator** — um microsserviço dedicado que consome todos os eventos de saga publicados pelos serviços e popula uma tabela central `saga_view` desnormalizada, sobre a qual roda uma UI tipo Temporal Web.
 
-Este plano técnico descreve o que precisa ser construído. **Não foi implementado nesta iteração** porque é trabalho de ~5-7 dias eng — registrá-lo aqui é parte da honestidade do estudo: defender coreografia exige assumir o custo de operacionalizá-la com observabilidade aceitável.
+Este plano técnico descreve o que precisa ser construído. **Não foi implementado nesta iteração** — registrá-lo aqui é parte da honestidade do estudo: defender coreografia exige assumir o esforço de operacionalizá-la com observabilidade aceitável.
 
 ### §7.1 Arquitetura proposta
 
@@ -348,17 +348,16 @@ Filament admin panel sobre `saga_view`:
 - **Ações:** retry manual (republica `saga.started.<flow>` com mesmo `saga_id` + payload original via `EventBus::publish()` — não `startSaga()`, que geraria UUID novo), abort (publica `saga.aborted`).
 - **Métricas agregadas:** % completas/compensadas/falhas última hora, p50/p95/p99 de duração por `saga_type`.
 
-### §7.5 Custos estimados
+### §7.5 Componentes a construir e operar
 
-| Componente                                | Custo eng    | Custo operacional              |
-| ----------------------------------------- | ------------ | ------------------------------ |
-| Schema + migrations                       | ~0.5 dia     | -                              |
-| Worker consumer + idempotência            | ~1.5 dia     | 1 container leve (~30 MiB RAM) |
-| Filament admin (lista + drill-down)       | ~2 dias      | Roteia para banco existente    |
-| Métricas agregadas (Grafana ou dashboard) | ~1 dia       | Reusa stack de observabilidade |
-| Testes (unit + integração)                | ~1 dia       | -                              |
-| **Total inicial**                         | **~6 dias**  | -                              |
-| Manutenção recorrente                     | ~0.5 dia/mês | $30-50/mês de banco/container  |
+| Componente                                | Custo operacional recorrente   |
+| ----------------------------------------- | ------------------------------ |
+| Schema + migrations                       | -                              |
+| Worker consumer + idempotência            | 1 container leve (~30 MiB RAM) |
+| Filament admin (lista + drill-down)       | Roteia para banco existente    |
+| Métricas agregadas (Grafana ou dashboard) | Reusa stack de observabilidade |
+| Testes (unit + integração)                | -                              |
+| Manutenção recorrente                     | $30-50/mês de banco/container  |
 
 ### §7.6 Quando construir o Saga Aggregator
 
@@ -369,85 +368,86 @@ Filament admin panel sobre `saga_view`:
 
 Construir o Saga Aggregator é **recriar parte do que o Temporal entrega de graça** (lista de workflows, drill-down, retry). A diferença é:
 
-| Aspecto                            | Saga Aggregator (caseiro)     | Temporal Web              |
-| ---------------------------------- | ----------------------------- | ------------------------- |
-| Custo inicial                      | ~6 dias eng                   | $0 (vem com Temporal)     |
-| Replay determinístico              | não há                        | nativo                    |
-| Auditoria de payload entrada/saída | sim, se publicado nos eventos | nativo                    |
-| Visualização gráfica do fluxo      | tabela + JSON                 | timeline gráfica nativa   |
-| Custo de manter                    | ~0.5 dia/mês                  | $0 (Temporal mantém)      |
-| Lock-in                            | nenhum                        | médio (Temporal-specific) |
+| Aspecto                            | Saga Aggregator (caseiro)            | Temporal Web              |
+| ---------------------------------- | ------------------------------------ | ------------------------- |
+| Disponibilidade da feature         | construir e manter internamente      | nativo, vem com Temporal  |
+| Replay determinístico              | não há                               | nativo                    |
+| Auditoria de payload entrada/saída | sim, se publicado nos eventos        | nativo                    |
+| Visualização gráfica do fluxo      | tabela + JSON                        | timeline gráfica nativa   |
+| Manutenção                         | sob responsabilidade do time         | sob responsabilidade do Temporal |
+| Lock-in                            | nenhum                               | médio (Temporal-specific) |
 
-**Resumindo:** o Saga Aggregator é viável mas é **trabalho real**. Quando o estudo defende coreografia em RabbitMQ, defende **com este custo agregado** — não como "coreografia é grátis".
+**Resumindo:** o Saga Aggregator é viável mas é **trabalho real**, com componentes a construir, testar e manter ao longo do tempo. Quando o estudo defende coreografia em RabbitMQ, defende **com esses componentes adicionais a manter** — não como "coreografia é grátis".
 
 ---
 
-## §8 TCO em 3 cenários
+## §8 TCO recorrente (infra/SaaS) em 3 cenários
 
-A discussão de custo até aqui ficou em prosa ("~3 dias eng", "~$30-150/mês", "$58k/ano em escala"). Esta seção modela 3 cenários de volume e calcula TCO 12 meses para cada combinação relevante de modelo+ferramenta. **Premissas comuns:** ambiente AWS, equipe com expertise prévia em PHP/MariaDB/Laravel, custo de eng ~$80/h ou ~$640/dia, 1 ano de horizonte.
+Esta seção modela 3 cenários de volume e calcula **TCO recorrente em 12 meses considerando apenas custos de infra/SaaS** — sem parametrizar custo de engenharia. **Premissas comuns:** ambiente AWS, 1 ano de horizonte, sem provisão de DBA dedicado a menos que indicado.
 
 ### Cenário A — Volume baixo (100 sagas/dia ≈ 3k/mês)
 
 Caso típico de operação interna ou produto early-stage.
 
-| Combinação                          | Custo eng adoção | Custo recorrente 12m              | Total 12m  |
-| ----------------------------------- | ---------------- | --------------------------------- | ---------- |
-| RabbitMQ orquestrado + lib interna  | ~17 dias = $11k  | $50/mês broker self-hosted        | ~$11.6k    |
-| RabbitMQ coreografado               | ~12 dias = $7.7k | $50/mês broker self-hosted + agg. | ~$8.3k     |
-| **Temporal self-hosted (Postgres)** | ~25 dias = $16k  | ~$200/mês infra + $30 RDS         | ~$18.8k    |
-| **Temporal Cloud**                  | ~15 dias = $9.6k | $25/mês free tier (3k abaixo)     | ~$9.9k     |
-| **Step Functions**                  | ~10 dias = $6.4k | $0 free tier (4k transições/mês)  | **~$6.4k** |
+| Combinação                          | Custo recorrente mensal             | Custo recorrente 12m |
+| ----------------------------------- | ----------------------------------- | -------------------- |
+| RabbitMQ orquestrado + lib interna  | $50/mês broker self-hosted          | ~$600                |
+| RabbitMQ coreografado               | $50/mês broker self-hosted + agg.   | ~$600                |
+| Temporal self-hosted (Postgres)     | ~$200/mês infra + $30 RDS           | ~$2.8k               |
+| Temporal Cloud                      | $25/mês (free tier abaixo)          | ~$300                |
+| **Step Functions**                  | $0 free tier (4k transições/mês)    | **~$0**              |
 
-**Vencedor:** Step Functions. Free tier cobre o volume; custo de adoção é o menor (~10 dias, ASL é simples para 3 steps).
+**Vencedor recorrente:** Step Functions (free tier cobre o volume). RabbitMQ self-hosted ou Temporal Cloud free tier também são essencialmente nulos. Decisão real pesa em outros critérios (DX, lock-in, conceitos novos a aprender).
 
 ### Cenário B — Volume médio (10k sagas/dia ≈ 300k/mês)
 
 Caso típico de SaaS B2B em produção estabelecida.
 
-| Combinação                             | Custo eng adoção | Custo recorrente 12m               | Total 12m   |
-| -------------------------------------- | ---------------- | ---------------------------------- | ----------- |
-| **RabbitMQ orquestrado + lib interna** | ~22 dias = $14k  | $1.2k/mês broker + storage         | **~$28.4k** |
-| RabbitMQ coreografado                  | ~17 dias = $11k  | $1.2k/mês broker + saga aggregator | ~$25.4k     |
-| Temporal self-hosted (Postgres)        | ~25 dias = $16k  | $4k/mês infra + DBA part-time      | ~$64k       |
-| **Temporal Cloud**                     | ~15 dias = $9.6k | ~$1.6k/mês (Essentials + actions)  | **~$28.8k** |
-| Step Functions                         | ~10 dias = $6.4k | ~$3k/mês ($0.025/transição × 1.2M) | ~$42.4k     |
+| Combinação                             | Custo recorrente mensal              | Custo recorrente 12m |
+| -------------------------------------- | ------------------------------------ | -------------------- |
+| **RabbitMQ orquestrado + lib interna** | $1.2k/mês broker + storage           | **~$14.4k**          |
+| RabbitMQ coreografado                  | $1.2k/mês broker + saga aggregator   | ~$14.4k              |
+| Temporal self-hosted (Postgres)        | $4k/mês infra + DBA part-time        | ~$48k                |
+| Temporal Cloud                         | ~$1.6k/mês (Essentials + actions)    | ~$19.2k              |
+| Step Functions                         | ~$3k/mês ($0.025/transição × 1.2M)   | ~$36k                |
 
-**Empate técnico:** RabbitMQ orquestrado vs Temporal Cloud, ambos ~$28k em 12m. Decisão fica em DX, lock-in e capacidade SRE.
+**Vencedor recorrente:** RabbitMQ (orquestrado ou coreografado), ~$14k. Temporal Cloud fica ~30% acima. Step Functions começa a ficar caro pelo pricing por transição.
 
 ### Cenário C — Volume alto (100k sagas/dia ≈ 3M/mês)
 
 Caso de marketplaces grandes ou backbones críticos.
 
-| Combinação                             | Custo eng adoção | Custo recorrente 12m              | Total 12m |
-| -------------------------------------- | ---------------- | --------------------------------- | --------- |
-| RabbitMQ orquestrado (cluster HA)      | ~30 dias = $19k  | $5k/mês cluster quorum + obs      | ~$79k     |
-| **RabbitMQ coreografado (cluster HA)** | ~25 dias = $16k  | $5k/mês cluster + saga aggregator | **~$76k** |
-| Temporal self-hosted (Aurora HA)       | ~30 dias = $19k  | $8k/mês infra + DBA dedicado      | ~$115k    |
-| Temporal Cloud                         | ~15 dias = $9.6k | ~$5k/mês ($58k/ano em escala)     | ~$67.6k   |
-| Step Functions                         | ~10 dias = $6.4k | ~$25k/mês (12M transições)        | ~$306k    |
+| Combinação                             | Custo recorrente mensal           | Custo recorrente 12m |
+| -------------------------------------- | --------------------------------- | -------------------- |
+| RabbitMQ orquestrado (cluster HA)      | $5k/mês cluster quorum + obs      | ~$60k                |
+| **RabbitMQ coreografado (cluster HA)** | $5k/mês cluster + saga aggregator | **~$60k**            |
+| Temporal self-hosted (Aurora HA)       | $8k/mês infra + DBA dedicado      | ~$96k                |
+| Temporal Cloud                         | ~$5k/mês ($58k/ano em escala)     | ~$60k                |
+| Step Functions                         | ~$25k/mês (12M transições)        | ~$300k               |
 
-**Vencedor financeiro:** Temporal Cloud em pricing puro. Mas RabbitMQ coreografado é competitivo se o time tem capacidade SRE.
+**Empate triplo recorrente:** RabbitMQ-orq, RabbitMQ-cor e Temporal Cloud, todos ~$60k/ano. Step Functions fica 5× mais caro pelo pricing por transição em escala. Decisão pesa em capacidade SRE, lock-in e DX (não em $).
 
 ### Análise consolidada
 
-| Volume | Vencedor financeiro                  | Vencedor por DX                              | Vencedor por risco operacional     |
-| ------ | ------------------------------------ | -------------------------------------------- | ---------------------------------- |
-| Baixo  | Step Functions                       | Empate Step Functions / RabbitMQ orquestrado | Step Functions (managed)           |
-| Médio  | Empate RabbitMQ-orq / Temporal Cloud | Temporal Cloud (DX rica)                     | Temporal Cloud (managed)           |
-| Alto   | Temporal Cloud                       | Temporal Cloud                               | RabbitMQ self-hosted (sem lock-in) |
+| Volume | Mais barato (recorrente)           | Vencedor por DX                              | Vencedor por risco operacional     |
+| ------ | ---------------------------------- | -------------------------------------------- | ---------------------------------- |
+| Baixo  | Step Functions / RabbitMQ / Temporal Cloud (todos ~$0-$300/ano) | Empate Step Functions / RabbitMQ orquestrado | Step Functions (managed)           |
+| Médio  | RabbitMQ (qualquer modelo)         | Temporal Cloud (DX rica)                     | Temporal Cloud (managed)           |
+| Alto   | Empate RabbitMQ / Temporal Cloud   | Temporal Cloud                               | RabbitMQ self-hosted (sem lock-in) |
+
+> **Observação importante:** com tempo de eng não parametrizado, RabbitMQ se torna mais competitivo do que parecia antes — o custo construído (lib interna, saga aggregator, observabilidade custom) é absorvido como esforço pago em conhecimento e código mantido pelo time, não como item financeiro. A decisão recorrente passa a ser principalmente entre "operar broker próprio" (RabbitMQ) vs "pagar SaaS" (Temporal Cloud) vs "pagar por transição" (Step Functions).
 
 **Limitações destes números:**
 
-- Estimativas de adoção em dias eng são **otimistas** — assumem que o time já tem expertise nas ferramentas adjacentes (PHP, Laravel, AWS). Se não tiver, somar ~1 mês onboarding.
 - Custos de cloud são para us-east-1 + uma instância pequena/média. Multi-AZ ou multi-região dobra ou triplica.
-- Não inclui **custo de incidentes** (downtime, débitos pré-produção que vazam, etc.). Se o estudo for mais conservador, somar ~10-20% como provisão de risco.
-- Não inclui **custo de migração** se já existe sistema legado (estimar entre 1.5× e 3× do custo de adoção greenfield).
+- Não inclui **custo de incidentes** (downtime, débitos pré-produção que vazam, etc.). Se o estudo for mais conservador, somar ~10-20% como provisão de risco no recorrente.
+- Não inclui custo de **migração** se já existe sistema legado a ser substituído — esse custo é em forma de esforço (não parametrizado aqui), além de eventual operação em paralelo de duas implementações por algum período de transição.
 
 ### Como usar esta tabela
 
 1. Estime seu volume mensal real de sagas (não chute alto — meça o piloto).
 2. Ache o cenário mais próximo (A, B ou C).
-3. Olhe os 3 vencedores (financeiro, DX, risco).
+3. Olhe os 3 vencedores (custo recorrente, DX, risco operacional).
 4. Se os 3 apontam pra mesma ferramenta, é decisão fácil. Se não, escolha por qual eixo é mais crítico para o produto.
 5. **Caveat de longo prazo:** Cloud cresce com volume; self-hosted cresce com headcount/SRE. Se o produto vai 10× em 12 meses, o cenário pode mudar de A para B ou de B para C — escolher uma ferramenta que **acompanha** essa transição.
 

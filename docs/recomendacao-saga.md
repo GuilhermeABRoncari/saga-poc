@@ -39,7 +39,7 @@ Cada PoC implementou o **mesmo workflow** (3 passos: `ReserveStock` → `ChargeC
 
 | Eixo                                                   | RabbitMQ orquestrado                          | RabbitMQ coreografado           | Temporal                                       | Step Functions                          |
 | ------------------------------------------------------ | --------------------------------------------- | ------------------------------- | ---------------------------------------------- | --------------------------------------- |
-| **LOC da lib**                                         | 381                                           | 357                             | wrapper estimado ~5-7 dias eng                 | 119 (state-machine.json) + workers      |
+| **LOC da lib**                                         | 381                                           | 357                             | wrapper fino sobre o SDK oficial               | 119 (state-machine.json) + workers      |
 | **T6.2 latência sequencial p50**                       | 21.8 ms                                       | **10.2 ms**                     | 59.9 ms                                        | ~600 ms (LocalStack)                    |
 | **T6.2 latência sequencial p99**                       | 23.8 ms                                       | **20.4 ms**                     | 351.2 ms                                       | ~2092 ms (LocalStack)                   |
 | **Throughput sequencial**                              | ~46/s                                         | **~94/s**                       | ~7.4/s                                         | ~7.5/s (LocalStack)                     |
@@ -56,7 +56,8 @@ Cada PoC implementou o **mesmo workflow** (3 passos: `ReserveStock` → `ChargeC
 | **T4.4 conceito de timeout**                           | Não tem                                       | Não tem                         | 4 tipos distintos                              | Definido na ASL                         |
 | **Lock-in**                                            | Nenhum (AMQP padrão)                          | Nenhum (AMQP padrão)            | Médio (engine + SDK)                           | Profundo (AWS-only)                     |
 | **Custo Cloud em escala (~17M sagas/mês × 7 actions)** | $2.4-4.8k/12 meses self-host                  | $2.4-4.8k/12 meses self-host    | **~$58k/ano** Cloud / ~$3-6k/ano self-host     | ~$51k/ano                               |
-| **Custo de adoção (eng × dias)**                       | ~17-23 dias inicial                           | ~10-12 dias inicial             | ~10 dias + 1 semestre calibração               | ~5-7 dias                               |
+| **Componentes próprios a manter**                      | lib + orchestrator + DLX + observabilidade    | lib + DLX + saga aggregator     | wrapper fino + determinismo lint               | ASL + Terraform + IAM/IRSA              |
+| **Conceitos novos a aprender**                         | AMQP, idempotência, outbox, retomada após boot | AMQP, idempotência, eventual consistency entre serviços | workflow determinístico, signals/queries, replay | ASL DSL, IAM/IRSA, ARN-based dedup |
 
 > Notas:
 >
@@ -152,7 +153,7 @@ A escolha "RabbitMQ orquestrado vs RabbitMQ coreografado vs Temporal vs Step Fun
 
 | Característica                                                | Recomendação               | Justificativa                                                                                        |
 | ------------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------- |
-| **Stack monolítica em MariaDB**                               | RabbitMQ (qualquer modelo) | Reusa banco existente; Temporal exige 2º SGBD (MySQL 8 ou Postgres — `findings-temporal.md` §2.2.6). |
+| **Stack monolítica em MariaDB**                               | RabbitMQ (qualquer modelo) | Reusa banco existente; Temporal exige 2º SGBD (MySQL 8 ou Postgres — `findings-temporal.md` §2.2.6) com custo recorrente de provisão. |
 | **Stack já em MySQL 8 ou Postgres**                           | Empate Temporal / RabbitMQ | Sem custo de SGBD adicional; decisão por outros eixos.                                               |
 | **Multi-DC ativo-ativo obrigatório**                          | Temporal com Cassandra     | Único combo com primitivas multi-DC nativas.                                                         |
 | **Sem capacidade SRE para operar Postgres+ES self-hosted**    | **Temporal Cloud**         | Cloud absorve operação. Custo financeiro vira aceitável pelo zero-overhead operacional.              |
@@ -166,7 +167,7 @@ A escolha "RabbitMQ orquestrado vs RabbitMQ coreografado vs Temporal vs Step Fun
 3. **Filtro por SGBD.** Se a stack é MariaDB e adicionar MySQL 8 ou Postgres é deal-breaker, Temporal sai (ou vai pra Cloud).
 4. **Filtro por escala de fluxo.** Steps ≤ 3 → coreografia ganha; ≥ 8 → Temporal ganha; entre 4-7, decidir por outros critérios.
 5. **Filtro por time/governance.** Compliance estrito → Temporal. Time pequeno + DX simples → orquestrado em RabbitMQ. Múltiplos squads → coreografia.
-6. **Decisor final:** custos 12 meses (TCO em 3 cenários em [`consideracoes.md`](./consideracoes.md) §8.1). Faz a conta.
+6. **Decisor final:** custos recorrentes de infra/SaaS em 12 meses (TCO em 3 cenários em [`consideracoes.md`](./consideracoes.md) §8.1). Faz a conta — só infra/SaaS, não eng.
 
 ---
 
@@ -177,7 +178,7 @@ Quando NÃO usar a recomendação principal de cada combinação:
 - **Não use RabbitMQ orquestrado** se há mudanças frequentes na ordem dos steps. T5.1 (silent corruption) é um risco silencioso e cumulativo — saga marcada `COMPLETED` com state corrompido (estoque 2x, pagamento perdido) sem alerta nem log.
 - **Não use coreografia** se o fluxo cresce além de 5-6 steps sem fronteira clara entre serviços. Vira spaghetti. Em coreografia operacional, **construir um Saga Aggregator é trabalho real** (consumer + `saga_view` + UI; ver [`consideracoes.md`](./consideracoes.md) §8.0) — não é "coreografia é grátis".
 - **Não use Temporal** se p99 < 60ms é requisito real do produto. O engine adiciona ~40ms baseline.
-- **Não use Temporal** se o stack é MariaDB e adicionar 2º SGBD é vetado. MariaDB **não funciona** (Multi-Valued Indexes). MySQL 8 funciona, mas adiciona ~$30-150/mês de RDS/Aurora + ~3 dias eng.
+- **Não use Temporal** se o stack é MariaDB e adicionar 2º SGBD é vetado. MariaDB **não funciona** (Multi-Valued Indexes). MySQL 8 funciona, mas adiciona ~$30-150/mês de RDS/Aurora recorrentes + uma rodada de migração de schema/conexões.
 - **Não use Step Functions** se você não está em AWS ou planeja sair. Lock-in é profundo (ASL, IAM, ARNs, CloudWatch, EventBridge).
 - **Não use Cassandra** como escolha de SGBD para Temporal "porque é NoSQL". É o mais complexo de operar do trio suportado; só se justifica em escala extrema (10k+ workflows/s, multi-DC).
 - **Não use quorum queues em single-node** "para ficar pronto pra HA". Quorum custa **−25% de throughput** mesmo em single-node (consenso Raft em cada `basic_publish`); só se justifica quando há cluster real com replicação multi-node.

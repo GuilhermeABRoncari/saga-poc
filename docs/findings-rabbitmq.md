@@ -87,17 +87,16 @@ Compensação **funcionou** ponta a ponta com `FORCE_FAIL=step3`: orchestrator d
 
 Para chegar a "mínimo aceitável" (timeline básica + alerta de compensação falha + dashboard de sagas em andamento), a estimativa é:
 
-| Componente                                                                             | Esforço estimado             |
-| -------------------------------------------------------------------------------------- | ---------------------------- |
-| Logs estruturados (JSON) com `saga_id` em todos os containers                          | 2-3 horas                    |
-| Stack de logs (Loki ou ELK), pelo menos local                                          | 1 dia (1ª vez), depois reuso |
-| Métricas Prometheus expostas pela lib (counters de saga.started/completed/compensated) | 4-6 horas                    |
-| Dashboard Grafana padrão (sagas/min, % compensadas, p95 duração)                       | 1 dia                        |
-| DLX nas filas de comando + alerta CRÍTICO em "DLX recebeu mensagem"                    | 4-6 horas                    |
-| Tabela `saga_events` com history append-only (vs só snapshot) para replay grosso       | 1-2 dias                     |
-| **Total estimado**                                                                     | **3-5 dias engenheiro**      |
+| Componente                                                                             |
+| -------------------------------------------------------------------------------------- |
+| Logs estruturados (JSON) com `saga_id` em todos os containers                          |
+| Stack de logs (Loki ou ELK), pelo menos local                                          |
+| Métricas Prometheus expostas pela lib (counters de saga.started/completed/compensated) |
+| Dashboard Grafana padrão (sagas/min, % compensadas, p95 duração)                       |
+| DLX nas filas de comando + alerta CRÍTICO em "DLX recebeu mensagem"                    |
+| Tabela `saga_events` com history append-only (vs só snapshot) para replay grosso       |
 
-Esse esforço é "uma vez" — depois replicado entre projetos. Mas precisa ser mantido.
+Esse trabalho é "uma vez" — depois replicado entre projetos. Mas precisa ser mantido.
 
 ---
 
@@ -175,7 +174,7 @@ Se o orchestrator morrer entre (1) e (2), ou entre (2) e (3):
 
 **Resultado esperado** (não testado, mas óbvio do código): há **zero mecanismo de resume** na lib atual. O orchestrator não consulta `sagas WHERE status='RUNNING'` no boot. Mensagens podem estar em filas (recuperáveis) ou já terem sido processadas/ackadas (perdidas).
 
-**Esforço para fechar o gap:** método `resumeStuckSagas()` rodando no boot do orchestrator — varre SQLite/DB por sagas RUNNING há mais de N minutos sem progresso, decide se republicar último comando ou compensar. **Estimativa: 1-2 dias** + testes.
+**Como fechar o gap:** método `resumeStuckSagas()` rodando no boot do orchestrator — varre SQLite/DB por sagas RUNNING há mais de N minutos sem progresso, decide se republicar último comando ou compensar. Trabalho não-trivial; precisa testes específicos.
 
 Em Temporal isso é problema do engine; o cliente não precisa pensar.
 
@@ -202,7 +201,7 @@ A partir do 4.0, **classic mirrored queues foram removidas** do produto. Para HA
 - **`acquired-count` vs `delivery-count`**: returns sem falha não contam para limites de poison message — muda a heurística de DLX.
 - **Priority de mensagem**: era 2:1 ratio em classic, agora **strict ordering em 32 níveis** em quorum. Se a lib usar prioridade, comportamento muda.
 
-**Impacto na estimativa de adoção:** a lista de débitos pré-produção em `consideracoes.md` ganha um item — _redesenhar declaração de filas para quorum_, com testes específicos de redelivery sob falha de líder Raft. Custo: ~2-3 dias.
+**Impacto na adoção:** a lista de débitos pré-produção em `consideracoes.md` ganha um item — _redesenhar declaração de filas para quorum_, com testes específicos de redelivery sob falha de líder Raft.
 
 ### 7.2 Resultados empíricos com quorum queues (NOVO — 2026-05-04)
 
@@ -231,13 +230,13 @@ A lib `AmqpTransport` foi estendida com flag `QUEUE_TYPE=quorum` para declarar q
 
 ---
 
-## 8. Custo projetado 12 meses
+## 8. Custo recorrente projetado 12 meses (infra/SaaS apenas)
 
 | Item                                                       | RabbitMQ self-hosted                             | Temporal Cloud (estimativa)                        |
 | ---------------------------------------------------------- | ------------------------------------------------ | -------------------------------------------------- |
 | Infra                                                      | 3 nodes c/ RAM/CPU dedicados (~$200-400/mês AWS) | $100-200/mês (Essentials/Growth)                   |
-| Engenharia para construir lib + observabilidade            | 3-5 dias inicial + manutenção recorrente         | 0 (lib do Temporal já existe; só RoadRunner setup) |
-| Engenharia para operar                                     | 1 dia/mês (médio, monitoring + DLX)              | 0 (Cloud) ou ~1 dia/mês (self-hosted EKS)          |
+| Engenharia para construir lib + observabilidade            | manutenção contínua interna                      | 0 (lib do Temporal já existe; só RoadRunner setup) |
+| Engenharia para operar                                     | carga operacional contínua                       | 0 (Cloud) ou carga operacional SRE (self-hosted EKS) |
 | Risco de outage por bug em lib interna                     | médio-alto (código novo)                         | baixo (Temporal core)                              |
 | **Comparação justa só vai ser feita após PoC do Temporal** |                                                  |                                                    |
 

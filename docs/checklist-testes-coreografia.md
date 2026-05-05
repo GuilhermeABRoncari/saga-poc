@@ -49,7 +49,7 @@
 ### T2.1 Construir dashboard e timeline de saga
 
 - **[ ] adaptado, não executado.** Em coreografia não há tabela central com timeline da saga. A solução madura é o **Saga Aggregator** (consumer que agrega eventos `saga.*` em uma tabela `saga_view` desnormalizada + UI Filament/Livewire). Plano técnico completo em [`consideracoes.md`](./consideracoes.md) §7. Não construído nesta PoC — registrado como "trabalho real de adoção" em vez de "refinamento do estudo".
-- **Diferença vs orquestrado:** orquestrado tem `saga_states` central; basta CRUD admin (Filament). Coreografado exige **construir** o agregador (~6 dias eng).
+- **Diferença vs orquestrado:** orquestrado tem `saga_states` central; basta CRUD admin (Filament). Coreografado exige **construir** o agregador (componente próprio a manter).
 
 ### T2.2 Alerta automático em saga FAILED
 

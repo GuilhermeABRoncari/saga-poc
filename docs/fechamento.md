@@ -110,7 +110,7 @@ Durante a iteração 2, RabbitMQ subiu para **4.3** (Khepri/Raft, Mnesia removid
 - Throughput burst subiu de 48/s → 142/s (~3×, com classic durable).
 - Quorum queues (única opção HA suportada em 4.x) custam **−25% de throughput** em single-node por causa do consenso Raft em cada `basic_publish`. T1.4 (workers não auto-reconectam) **não é mitigado** por quorum — é gap do lado client (`php-amqplib`), não do server.
 
-E achado adicional do Temporal: **MariaDB não suportado** (Multi-Valued Indexes do MySQL 8 que MariaDB 11.4 não implementa). **MySQL 8 confirmado funcional** empiricamente (schema migration completa até 1.14, sem adaptação na PoC). Isso transforma "incompatibilidade Temporal × MariaDB" de deal-breaker em **item quantificável de TCO**: ~3 dias eng + ~$30-150/mês de RDS/Aurora MySQL 8 adicional. Detalhes em [`findings-temporal.md`](./findings-temporal.md) §2.2.6.
+E achado adicional do Temporal: **MariaDB não suportado** (Multi-Valued Indexes do MySQL 8 que MariaDB 11.4 não implementa). **MySQL 8 confirmado funcional** empiricamente (schema migration completa até 1.14, sem adaptação na PoC). Isso transforma "incompatibilidade Temporal × MariaDB" de deal-breaker em **item quantificável de TCO**: provisão de um SGBD adicional (~$30-150/mês de RDS/Aurora MySQL 8) mais uma rodada one-time de migração de schema/conexões. Detalhes em [`findings-temporal.md`](./findings-temporal.md) §2.2.6.
 
 ---
 
@@ -122,7 +122,7 @@ Foi cogitado construir uma 5ª PoC simulando coreografia em Temporal — workers
 
 1. **Não é caso de uso recomendado pelo próprio Temporal.** Signals existem para input externo num workflow em curso, não para implementar coreografia distribuída. Construir a PoC seria forçar a ferramenta para fora do design intent.
 2. **Não responde nenhuma pergunta nova.** Já há orquestração em Temporal e coreografia em RabbitMQ. Coreografia em Temporal não acrescenta evidência relevante porque o ganho da coreografia (ausência de orquestrador central, acoplamento mínimo, baixo footprint) **se opõe diretamente** ao ganho de Temporal (engine central com durable execution, audit trail, replay).
-3. **Custo de oportunidade.** Cada dia gasto numa 5ª PoC poderia refinar o que já temos — completar Tier 1-6 do coreografado, validar Saga Aggregator real, medir quorum em produção.
+3. **Custo de oportunidade.** Esforço gasto numa 5ª PoC competiria com o que já temos — completar Tier 1-6 do coreografado, validar Saga Aggregator real, medir quorum em produção.
 
 A combinação faltante (coreografado em Step Functions) também é descartada pelo mesmo argumento — Step Functions é orquestrador puro, sem semântica natural de coreografia.
 
@@ -149,7 +149,7 @@ A trajetória é o que esperávamos de um estudo honesto: começou em narrativa,
 
 - **Congelar critérios antes de medir.** Os critérios da §3.2 da recomendação foram congelados pré-PoC e seguidos rigorosamente. Sem isso, qualquer resultado vira justificativa para a preferência inicial.
 - **PoC = evidência, não exibição.** A PoC RabbitMQ orquestrada parecia "boa o suficiente" no happy path. T5.1 só apareceu sob mudança de código realista; T1.4 só apareceu sob falha de infra. Sem testes adversariais, esses gaps ficariam invisíveis.
-- **Reabrir a decisão é mais barato que rever depois.** Reconhecer "faltou medir o ramo coreografado" antes de fechar custou ~2 semanas. Descobrir isso após adoção em produção custaria muito mais.
+- **Reabrir a decisão é mais barato que rever depois.** Reconhecer "faltou medir o ramo coreografado" antes de fechar exigiu uma iteração extra; descobrir isso após adoção em produção exigiria muito mais — refator distribuído num sistema já em uso.
 - **Ferramenta certa depende do cenário.** Tentar fechar em "ferramenta vencedora" universal foi o viés da iteração 1. A árvore de decisão final reflete que **não existe vencedor único** — existem combinações apropriadas para cada cenário.
 
 ---

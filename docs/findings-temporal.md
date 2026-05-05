@@ -21,7 +21,7 @@
 > - **Cassandra** é descartada — apesar de ser NoSQL, é provavelmente o backend mais complexo de operar do trio (consistency levels por query, compaction strategies, repair sessions, tombstones, schema query-first). Faz sentido só em escala muito alta, e o time não tem familiaridade.
 > - **Postgres externo (Supabase/Neon)** é descartado — fora do VPC implica latência de internet (5-50ms vs <1ms intra-VPC), egress AWS pago, e dados de saga fora do perímetro de compliance gerenciado.
 >
-> **Custo revisado da incompatibilidade** (assumindo MySQL 8 como escolha): **~3 dias eng inicial + ~$30-150/mês de RDS/Aurora MySQL 8 adicional + zero custo recorrente de skill set**. É um item quantificável de TCO, não um deal-breaker.
+> **Custo revisado da incompatibilidade** (assumindo MySQL 8 como escolha): provisão de um SGBD adicional (~$30-150/mês de RDS/Aurora MySQL 8) + uma rodada one-time de migração de schema/conexões + zero custo recorrente de skill set. É um item quantificável de TCO recorrente, não um deal-breaker.
 >
 > ### Validação empírica (2026-05-04) — MySQL 8 confirmado funcional
 >
@@ -108,18 +108,17 @@ Compensação **funcionou** ponta a ponta no smoke test com `FORCE_FAIL=step3`:
 
 ---
 
-## 4. Esforço para observabilidade aceitável (estimativa)
+## 4. Componentes para observabilidade aceitável
 
-| Componente                      | Esforço estimado                                    | Comparação RabbitMQ                         |
-| ------------------------------- | --------------------------------------------------- | ------------------------------------------- |
-| Timeline visual + replay        | **gratuito** (UI Temporal)                          | 1-2 dias (tabela `saga_events` + UI custom) |
-| Logs estruturados em activities | 1-2 horas (handlers já são PHP comum)               | 2-3 horas                                   |
-| Métricas custom de negócio      | 4-6 horas (instrumentar activities + Grafana)       | mesmo                                       |
-| Alerta de compensação falha     | 2-3 horas (Temporal SDK metrics + Prometheus alert) | 4-6 horas (DLX + alerting)                  |
-| Search/dedup por saga ID        | gratuito                                            | 4-6 horas (logs estruturados + ELK)         |
-| **Total**                       | **~1 dia**                                          | **3-5 dias**                                |
+| Componente                      | Em Temporal                                         | Em RabbitMQ                                  |
+| ------------------------------- | --------------------------------------------------- | -------------------------------------------- |
+| Timeline visual + replay        | **gratuito** (UI Temporal)                          | construir tabela `saga_events` + UI custom   |
+| Logs estruturados em activities | handlers já são PHP comum                           | construir adapter de logs estruturados       |
+| Métricas custom de negócio      | instrumentar activities + Grafana                   | mesmo trabalho                               |
+| Alerta de compensação falha     | Temporal SDK metrics + Prometheus alert             | DLX + alerting custom                        |
+| Search/dedup por saga ID        | gratuito                                            | logs estruturados + ELK                      |
 
-Diferença real: o **trabalho pesado** (timeline + replay + search) que custaria 2-3 dias em RabbitMQ vem **pronto** no Temporal.
+Diferença real: o **trabalho pesado** (timeline + replay + search) que exigiria componentes próprios em RabbitMQ vem **pronto** no Temporal.
 
 ---
 
@@ -207,7 +206,7 @@ Empate qualitativo. Temporal vence em primeira leitura, RabbitMQ vence em "como 
 - Quando qualquer worker volta, pega decision tasks pendentes e continua.
 - Para perder workflow, seria necessário perder o Postgres + não ter backup — catástrofe operacional do server, não preocupação do dev.
 
-**Comparação com RabbitMQ:** órfãs no RabbitMQ+lib são preocupação real e exigem `resumeStuckSagas()` no boot do orchestrator (estimativa: 1-2 dias). **Em Temporal, gap não existe.**
+**Comparação com RabbitMQ:** órfãs no RabbitMQ+lib são preocupação real e exigem `resumeStuckSagas()` no boot do orchestrator (componente extra a construir e testar). **Em Temporal, gap não existe.**
 
 ---
 
@@ -244,7 +243,7 @@ Critério levantado após observar 31+ inserções por workflow em `laravel-work
 - Custo Cloud: Cloud cobra por action; cada evento conta. Em volume alto, agrava o custo de $58k/ano em escala já documentado.
 - Latência: cada evento exige round-trip de persistência — explica parcialmente o p99 de 351ms vs 22ms do RabbitMQ medido em testes anteriores.
 
-**Veredito do critério:** não desqualifica Temporal sozinho, mas é fator quantitativo concreto que entra no peso da decisão final. Combinado com custo de adoção (~1 semestre) e necessidade de lib interna, fortalece o caso de coreografia em volumes altos.
+**Veredito do critério:** não desqualifica Temporal sozinho, mas é fator quantitativo concreto que entra no peso da decisão final. Combinado com a curva de aprendizado da dialética determinística e a necessidade de lib interna, fortalece o caso de coreografia em volumes altos.
 
 ---
 
@@ -317,17 +316,16 @@ Tecnicamente funciona, mas estar **fora do VPC** introduz três custos não-óbv
 
 ### Custo de adoção revisado (com MySQL 8 escolhido)
 
-| Item                                                | Custo                                       |
+| Item                                                | Natureza                                    |
 | --------------------------------------------------- | ------------------------------------------- |
-| Provisionar instância RDS MySQL 8 ou Aurora MySQL   | ~1 dia (mesma rotina das instâncias atuais) |
-| Configurar Temporal apontando para a nova instância | ~0.5 dia                                    |
-| Adaptar dev local (`docker-compose` com `mysql:8`)  | ~0.5 dia                                    |
-| Runbook DR / monitoring / alertas                   | ~1 dia (reaproveitamento dos existentes)    |
-| **Total inicial**                                   | **~3 dias**                                 |
+| Provisionar instância RDS MySQL 8 ou Aurora MySQL   | one-time (mesma rotina das instâncias atuais) |
+| Configurar Temporal apontando para a nova instância | one-time                                    |
+| Adaptar dev local (`docker-compose` com `mysql:8`)  | one-time                                    |
+| Runbook DR / monitoring / alertas                   | one-time (reaproveitamento dos existentes)  |
 | Operação recorrente                                 | Marginal — mesma rotina dos RDS atuais      |
-| Custo financeiro                                    | ~$30-150/mês de RDS/Aurora adicional        |
+| Custo financeiro recorrente                         | ~$30-150/mês de RDS/Aurora adicional        |
 
-Comparado à versão original desta seção, o custo cai de "3-5 dias inicial + 0.5-1 dia/mês recorrente" para "**~3 dias inicial + zero recorrente extra**" — assumindo a escolha de MySQL 8.
+Comparado à versão original desta seção (que projetava operação recorrente com custo significativo), o cenário se reduz a uma migração one-time + custo recorrente marginal de uma instância RDS adicional, assumindo a escolha de MySQL 8.
 
 ### Implicação para a decisão
 
@@ -338,7 +336,7 @@ O achado **continua relevante**, mas perde força como bloqueador isolado:
 3. **Custo financeiro é uma linha a mais na fatura RDS** (~$30-150/mês), não um item negociado em comitê.
 4. **Argumentos arquiteturais a favor de Temporal** (correção sob mudança, durable execution, observabilidade out-of-the-box) **voltam para a mesa** — não estão mais bloqueados por "custo operacional permanente proibitivo".
 
-**Comparação com RabbitMQ + lib interna:** RabbitMQ continua tendo a vantagem de **zero SGBD adicional** — o estado de saga (`saga_states` no orquestrado, `step_log`/`compensation_log` local no coreografado) usa as instâncias MariaDB que os serviços já têm. Mas a vantagem é menor que a versão anterior desta seção sugeria: ~3 dias inicial + ~$30-150/mês não é um deal-breaker, é um item de TCO entre vários.
+**Comparação com RabbitMQ + lib interna:** RabbitMQ continua tendo a vantagem de **zero SGBD adicional** — o estado de saga (`saga_states` no orquestrado, `step_log`/`compensation_log` local no coreografado) usa as instâncias MariaDB que os serviços já têm. Mas a vantagem é menor que a versão anterior desta seção sugeria: uma migração one-time + ~$30-150/mês recorrente não é um deal-breaker, é um item de TCO entre vários.
 
 ### Veredito revisado
 
@@ -358,12 +356,12 @@ Pontos abertos para discussão posterior:
 | Item                                            | RabbitMQ self-hosted            | Temporal Cloud | Temporal self-host EKS      |
 | ----------------------------------------------- | ------------------------------- | -------------- | --------------------------- |
 | Infra básica                                    | $200-400/mês (3 nodes RabbitMQ) | $100-200/mês   | $250-500/mês (Aurora + EKS) |
-| Engenharia para construir lib + observabilidade | 3-5 dias inicial + manutenção   | 0 (SDK pronto) | 0 (SDK pronto)              |
-| Engenharia para operar                          | ~1 dia/mês                      | 0 (managed)    | ~1-2 dias/mês               |
+| Engenharia para construir lib + observabilidade | manutenção contínua interna     | 0 (SDK pronto) | 0 (SDK pronto)              |
+| Engenharia para operar                          | carga operacional contínua      | 0 (managed)    | carga operacional SRE       |
 | Risco de outage por bug em lib interna          | médio-alto                      | baixo          | baixo                       |
-| **Total estimado 12 meses**                     | $2400-4800 + ~12 dias eng       | $1200-2400     | $3000-6000 + ~15 dias eng   |
+| **Custo recorrente 12 meses (infra apenas)**    | $2400-4800                      | $1200-2400     | $3000-6000                  |
 
-**Cloud é a opção financeira mais barata no curto prazo.** Self-host EKS empata ou supera RabbitMQ no longo prazo, dado que **economiza 12+ dias de engenharia** que iriam para construir a lib RabbitMQ.
+**Cloud é a opção mais barata no curto prazo em infra recorrente.** Self-host EKS empata ou supera RabbitMQ a depender da escala — eng não está parametrizado aqui, mas o trabalho de manter lib interna do RabbitMQ é absorvido como conhecimento e código próprios do time, não como item financeiro.
 
 ---
 
@@ -402,14 +400,14 @@ Pontos abertos para discussão posterior:
 | Cenário A (kill service mid-handler)       | via requeue                     | via timeout+retry                           | empate                     |
 | Cenário B (kill orchestrator mid-flight)   | via queue durable               | via durable execution                       | empate                     |
 | Cenário C (at-least-once / execução dupla) | certeza sem idempotência        | exactly-once garantido                      | **Temporal**               |
-| Cenário D (saga órfã)                      | gap real (1-2 dias para fechar) | não existe                                  | **Temporal**               |
+| Cenário D (saga órfã)                      | gap real (precisa `resumeStuckSagas()`) | não existe                                  | **Temporal**               |
 | Observabilidade default                    | logs + Mgmt UI básico           | timeline + replay + search                  | **Temporal**               |
-| Esforço para observabilidade aceitável     | 3-5 dias eng                    | ~1 dia                                      | **Temporal**               |
+| Esforço para observabilidade aceitável     | construir agg + UI custom       | nativo (Temporal Web)                       | **Temporal**               |
 | DX em code review (1ª leitura)             | saga em 3-4 arquivos            | saga em 1 arquivo                           | **Temporal**               |
 | DX em code review (manter)                 | PHP comum                       | exige lint para evitar bugs de determinismo | **RabbitMQ**               |
-| Curva de aprendizado                       | baixa                           | semestre de calibração                      | **RabbitMQ**               |
+| Curva de aprendizado                       | baixa                           | dialética determinística (signals/queries/replay) é conceito novo | **RabbitMQ**               |
 | Lock-in                                    | AMQP padrão aberto              | moderado (OSS, mas API específica)          | **RabbitMQ**               |
-| Custo financeiro 12 meses                  | ~$2400-4800 + 12 dias eng       | ~$1200-2400 (Cloud)                         | **Temporal** (curto prazo) |
+| Custo recorrente infra 12 meses            | ~$2400-4800                     | ~$1200-2400 (Cloud)                         | **Temporal** (curto prazo) |
 | Operação self-host Swarm                   | viável                          | não suportado                               | **RabbitMQ**               |
 | Operação EKS                               | Helm                            | Helm                                        | empate                     |
 | Bus factor                                 | lib interna                     | SDK público                                 | **Temporal**               |
@@ -438,7 +436,7 @@ A vitória de Temporal é **na infraestrutura técnica**. A vitória de RabbitMQ
 Com os critérios já medidos:
 
 - Para a **infraestrutura de SAGA** propriamente dita, **Temporal entrega muito mais com muito menos código**, com observabilidade superior e gaps de resiliência (Cenário C, D) que o RabbitMQ+lib só fecha com investimento de engenharia recorrente.
-- O **custo de adoção** do Temporal é real e concentrado em: (1) curva de aprendizado da dialética determinística, (2) PECL grpc no build, (3) RoadRunner como runtime extra. Mitigáveis com pacote interno + lint + treinamento — investimento concentrado no primeiro semestre.
+- O **custo de adoção** do Temporal é real e concentrado em: (1) curva de aprendizado da dialética determinística (signals, queries, replay, getVersion), (2) PECL grpc no build, (3) RoadRunner como runtime extra. Mitigáveis com pacote interno + lint + treinamento — investimento concentrado em conceitos novos a aprender, não em quantidade de código.
 - O **trade-off final** depende de quanto se valoriza: **(A) capacidade técnica out-of-the-box** (vence Temporal) vs **(B) familiaridade do time + sem fricção de adoção** (vence RabbitMQ).
 
 A decisão final cabe à liderança técnica — estes findings dão a base, mas o peso relativo entre A e B é decisão de produto/cultura, não de engenharia pura.

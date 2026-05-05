@@ -12,7 +12,7 @@ Premissas em vigor:
 
 ---
 
-## Fase 0 — Pré-requisitos (1-2 dias)
+## Fase 0 — Pré-requisitos
 
 1. **RabbitMQ acessível**: se o cluster Swarm já tem RabbitMQ usado por jobs Laravel, reaproveitar. Senão, provisionar 3 nós com mirror queue policy + management plugin.
 2. **Repo do pacote interno** `acme/laravel-saga` criado (Packagist privado ou Satis). Esqueleto:
@@ -65,18 +65,18 @@ Premissas em vigor:
 
 ---
 
-## Fase 1 — Lib interna: implementar e publicar (esforço maior — ~10-15 dias)
+## Fase 1 — Lib interna: implementar e publicar
 
-Esta é a fase mais cara e a fonte dos 5 itens semi-bloqueantes do PoC. **Antes de instalar no `order-service`, a lib precisa cobrir**:
+Esta é a fase mais densa e a fonte dos 5 itens semi-bloqueantes do PoC. **Antes de instalar no `order-service`, a lib precisa cobrir**:
 
-| Item                                                               | Descoberto em | Custo    |
-| ------------------------------------------------------------------ | ------------- | -------- |
-| Reconexão automática AMQP com backoff                              | T1.4          | 2-3 dias |
-| Wait-for-ack do publisher (publisher confirms)                     | T2.3          | 1-2 dias |
-| Cobertura completa de falhas (timeout, DB down, network partition) | T2.2          | 3-5 dias |
-| Health-check do storage da saga state                              | T4.2          | 1 dia    |
-| Timeout configurável por step                                      | T4.4          | 1-2 dias |
-| Mitigação deadlock SQLite/MySQL sob load                           | T6.2          | 2-3 dias |
+| Item                                                               | Descoberto em |
+| ------------------------------------------------------------------ | ------------- |
+| Reconexão automática AMQP com backoff                              | T1.4          |
+| Wait-for-ack do publisher (publisher confirms)                     | T2.3          |
+| Cobertura completa de falhas (timeout, DB down, network partition) | T2.2          |
+| Health-check do storage da saga state                              | T4.2          |
+| Timeout configurável por step                                      | T4.4          |
+| Mitigação deadlock SQLite/MySQL sob load                           | T6.2          |
 
 API alvo:
 
@@ -100,7 +100,7 @@ SagaDefinition::for('activate-store')
 
 ---
 
-## Fase 2 — Infra do RabbitMQ local (Compose para dev) (1 dia)
+## Fase 2 — Infra do RabbitMQ local (Compose para dev)
 
 Adicionar ao `docker-compose.override.yml` do `order-service`:
 
@@ -143,7 +143,7 @@ Validação: `docker compose up rabbitmq` + `curl http://localhost:15672` (UI: g
 
 ---
 
-## Fase 3 — Imagem Docker (1 dia)
+## Fase 3 — Imagem Docker
 
 Diferente do Temporal, **não precisa de grpc nem RoadRunner** — handlers usam loop AMQP padrão (`php-amqplib`).
 
@@ -174,7 +174,7 @@ CI publica `order-service:1.x.y-api` e `order-service:1.x.y-cli`.
 
 ---
 
-## Fase 4 — Pacote interno: instalação no `order-service` (1 dia)
+## Fase 4 — Pacote interno: instalação no `order-service`
 
 ```bash
 cd order-service
@@ -222,7 +222,7 @@ DB_SAGA_DATABASE=saga_states
 
 ---
 
-## Fase 5 — Refatorar o endpoint de criação de pedido (2 dias)
+## Fase 5 — Refatorar o endpoint de criação de pedido
 
 ### 5.1 Definição da saga
 
@@ -324,7 +324,7 @@ class OrderHandlers
 
 ---
 
-## Fase 6 — Comandos Artisan (orchestrator + handlers) (fornecidos pelo pacote, 1 dia integração)
+## Fase 6 — Comandos Artisan (orchestrator + handlers) — fornecidos pelo pacote
 
 ```bash
 # Terminal 1: orquestrador (consome eventos *.completed/*.failed, decide próximo step ou compensação)
@@ -341,7 +341,7 @@ Em prod cada um vira um Deployment K8s ou serviço Swarm separado.
 
 ---
 
-## Fase 7 — Cross-service (chamada pra `payment-service`) (~3-5 dias por serviço novo)
+## Fase 7 — Cross-service (chamada pra `payment-service`)
 
 Diferente do Temporal Opção A (HTTP Activity), aqui a comunicação cross-service **é via fila AMQP** desde o início — caso contrário o orquestrador perde retry/compensação automática.
 
@@ -368,7 +368,7 @@ php artisan vendor:publish --tag=saga-config
 
 ---
 
-## Fase 8 — Manifestos Kubernetes / Swarm (~3-5 dias)
+## Fase 8 — Manifestos Kubernetes / Swarm
 
 ### 8.1 `order-service` (Kubernetes, primeiro a migrar)
 
@@ -437,7 +437,7 @@ services:
 
 ---
 
-## Fase 9 — Observabilidade e operação (5-7 dias)
+## Fase 9 — Observabilidade e operação
 
 Sem o "Temporal UI" pronto, observabilidade precisa ser construída:
 
@@ -457,7 +457,7 @@ Sem o "Temporal UI" pronto, observabilidade precisa ser construída:
 
 ---
 
-## Fase 10 — Defesa contra silent corruption (T5.1) — 2-3 dias por saga
+## Fase 10 — Defesa contra silent corruption (T5.1)
 
 T5.1 mostrou que reordenar steps em deploy faz a saga marcar `completed` com state corrompido (compensação não roda na ordem certa).
 
@@ -471,24 +471,23 @@ Mitigações **manuais** (Temporal evita built-in):
 
 ---
 
-## Cronograma consolidado
+## Ordem das fases
 
-| Fase                                                      | Esforço              | Quem             |
-| --------------------------------------------------------- | -------------------- | ---------------- |
-| 0. Pré-requisitos (RabbitMQ, repo lib, schema DB)         | 1-2 dias             | DevOps + Backend |
-| 1. **Implementar lib interna (5 itens semi-bloqueantes)** | **10-15 dias**       | Backend          |
-| 2. Compose local                                          | 1 dia                | Backend          |
-| 3. Dockerfile                                             | 1 dia                | Backend          |
-| 4. Instalação do pacote no `order-service`                | 1 dia                | Backend          |
-| 5. Refator do endpoint + handlers                         | 2 dias               | Backend          |
-| 6. Artisan commands (do pacote)                           | 1 dia                | Backend          |
-| 7. Cross-service (por serviço novo)                       | 3-5 dias por serviço | Backend          |
-| 8. Manifestos Kubernetes + Swarm                          | 3-5 dias             | DevOps           |
-| 9. Observabilidade custom + runbooks                      | 5-7 dias             | Backend + SRE    |
-| 10. Versionamento + lint anti-T5.1                        | 2-3 dias por saga    | Backend          |
-| **Total p/ primeiro saga em prod**                        | **~25-35 dias eng**  | —                |
+| Fase                                                      | Quem             | Bloqueia próxima fase? |
+| --------------------------------------------------------- | ---------------- | ---------------------- |
+| 0. Pré-requisitos (RabbitMQ, repo lib, schema DB)         | DevOps + Backend | Sim |
+| 1. **Implementar lib interna (5 itens semi-bloqueantes)** | Backend          | Sim — base de tudo |
+| 2. Compose local                                          | Backend          | Sim |
+| 3. Dockerfile                                             | Backend          | Sim |
+| 4. Instalação do pacote no `order-service`                | Backend          | Sim |
+| 5. Refator do endpoint + handlers                         | Backend          | Sim |
+| 6. Artisan commands (do pacote)                           | Backend          | Sim |
+| 7. Cross-service (por serviço novo)                       | Backend          | Sim quando saga atravessa serviço |
+| 8. Manifestos Kubernetes + Swarm                          | DevOps           | Sim para produção |
+| 9. Observabilidade custom + runbooks                      | Backend + SRE    | Não — incrementa após primeiro deploy |
+| 10. Versionamento + lint anti-T5.1                        | Backend          | Não — manutenção contínua por saga |
 
-Diferença vs Temporal (~17-23 dias): a lib interna concentra os custos que Temporal entrega prontos. Curva também é mais íngreme em serviços adicionais (cada novo bounded context exige nova rodada de Fases 4-6).
+Comparado ao Temporal: a lib interna concentra trabalho que o Temporal SDK + engine entregam prontos (durabilidade, retry, replay, signals). Cada novo bounded context exige uma nova rodada das Fases 4-6 — em Temporal, basta adicionar uma Activity nova ao worker.
 
 ---
 

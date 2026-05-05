@@ -12,7 +12,7 @@ Premissas em vigor:
 
 ---
 
-## Fase 0 — Pré-requisitos AWS (2-3 dias)
+## Fase 0 — Pré-requisitos AWS
 
 1. **Conta AWS com Step Functions habilitado** + IAM roles:
    - `OrderSagaStateMachineRole`: assume role do Step Functions, permissions `states:StartExecution`, `states:DescribeExecution`, e ARNs das **Activities** (definidas como AWS Activities, não Lambdas).
@@ -40,7 +40,7 @@ Premissas em vigor:
 
 ---
 
-## Fase 1 — Infra local (LocalStack) (1 dia)
+## Fase 1 — Infra local (LocalStack)
 
 LocalStack emula Step Functions razoavelmente bem (ver `saga-step-functions/docker-compose.yml` deste PoC). Para dev:
 
@@ -87,7 +87,7 @@ services:
 
 ---
 
-## Fase 2 — Imagem Docker (1 dia)
+## Fase 2 — Imagem Docker
 
 Step Functions não exige `grpc` nem RoadRunner — basta `aws/aws-sdk-php` e loop polling.
 
@@ -117,7 +117,7 @@ CI publica `order-service:1.x.y-api` e `order-service:1.x.y-cli`.
 
 ---
 
-## Fase 3 — Pacote interno + SDK AWS (1 dia)
+## Fase 3 — Pacote interno + SDK AWS
 
 Diferente das outras opções, aqui o pacote interno é menor — Step Functions cuida do orquestrador. O pacote só padroniza:
 
@@ -167,7 +167,7 @@ SFN_ACTIVITY_RESERVE_STOCK_ARN=arn:aws:states:us-east-1:1234:activity:reserve-st
 
 ---
 
-## Fase 4 — State Machine (Terraform + ASL JSON) (3-5 dias)
+## Fase 4 — State Machine (Terraform + ASL JSON)
 
 Reaproveitar `saga-step-functions/state-machine.json` deste PoC, substituindo placeholders `__ARN_*__` por interpolação Terraform. Estrutura ASL completa em ASCII:
 
@@ -325,7 +325,7 @@ resource "aws_sfn_state_machine" "activate_store" {
 
 ---
 
-## Fase 5 — Refatorar o endpoint de criação de pedido (1-2 dias)
+## Fase 5 — Refatorar o endpoint de criação de pedido
 
 ### 5.1 Antes
 
@@ -447,7 +447,7 @@ Local: `php artisan saga:worker order`.
 
 ---
 
-## Fase 6 — Manifestos Kubernetes (workers) (2-3 dias)
+## Fase 6 — Manifestos Kubernetes (workers)
 
 `k8s/order-service/saga-worker-deployment.yaml`:
 
@@ -498,7 +498,7 @@ metadata:
 
 ---
 
-## Fase 7 — Cross-service (chamada pra `payment-service`) (~3-5 dias por serviço)
+## Fase 7 — Cross-service (chamada pra `payment-service`)
 
 Mesma estrutura: o `payment-service` instala `acme/laravel-step-functions`, registra handlers de `charge-credit` e `refund-credit`, roda worker próprio.
 
@@ -536,7 +536,7 @@ services:
 
 ---
 
-## Fase 8 — Observabilidade e operação (3-5 dias)
+## Fase 8 — Observabilidade e operação
 
 CloudWatch dá observabilidade out-of-the-box, mas precisa integração com Datadog se a equipe não quiser usar Console AWS:
 
@@ -570,23 +570,22 @@ A múltiplos serviços × M sagas/dia em escala, custo SFN supera self-host Temp
 
 ---
 
-## Cronograma consolidado
+## Ordem das fases
 
-| Fase                                                | Esforço              | Quem             |
-| --------------------------------------------------- | -------------------- | ---------------- |
-| 0. AWS account + IAM + Terraform setup              | 2-3 dias             | DevOps           |
-| 1. LocalStack para dev                              | 1 dia                | Backend          |
-| 2. Dockerfile                                       | 1 dia                | Backend          |
-| 3. Pacote interno + SDK AWS                         | 1 dia                | Backend          |
-| 4. State machine ASL + Terraform                    | 3-5 dias             | DevOps + Backend |
-| 5. Refator do endpoint + handlers                   | 1-2 dias             | Backend          |
-| 6. Manifestos Kubernetes workers (IRSA)             | 2-3 dias             | DevOps           |
-| 7. Cross-service (por serviço)                      | 3-5 dias por serviço | Backend          |
-| 8. Observabilidade (CloudWatch → Datadog + alertas) | 3-5 dias             | SRE              |
-| 9. Cost dashboard + budget alerts                   | 1-2 dias             | SRE              |
-| **Total p/ primeiro saga em prod**                  | **~17-25 dias eng**  | —                |
+| Fase                                                | Quem             |
+| --------------------------------------------------- | ---------------- |
+| 0. AWS account + IAM + Terraform setup              | DevOps           |
+| 1. LocalStack para dev                              | Backend          |
+| 2. Dockerfile                                       | Backend          |
+| 3. Pacote interno + SDK AWS                         | Backend          |
+| 4. State machine ASL + Terraform                    | DevOps + Backend |
+| 5. Refator do endpoint + handlers                   | Backend          |
+| 6. Manifestos Kubernetes workers (IRSA)             | DevOps           |
+| 7. Cross-service (por serviço)                      | Backend          |
+| 8. Observabilidade (CloudWatch → Datadog + alertas) | SRE              |
+| 9. Cost dashboard + budget alerts                   | SRE              |
 
-Comparável ao Temporal em esforço — a economia em "lib interna não precisa existir" é compensada por Terraform/IAM/IRSA mais complexos e cost engineering contínuo.
+Comparado ao Temporal: a economia em "lib interna não precisa existir" é compensada por Terraform/IAM/IRSA mais complexos e cost engineering contínuo (transições ASL custam por evento — em volume alto isso vira o decisor).
 
 ---
 

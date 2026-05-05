@@ -13,7 +13,7 @@ Premissas em vigor:
 
 ---
 
-## Fase 0 — Pré-requisitos (1-2 dias)
+## Fase 0 — Pré-requisitos
 
 Decisões de plataforma que precisam estar resolvidas antes de qualquer commit:
 
@@ -64,7 +64,7 @@ Decisões de plataforma que precisam estar resolvidas antes de qualquer commit:
 
 ---
 
-## Fase 1 — Infra do RabbitMQ local (Compose para dev) (1 dia)
+## Fase 1 — Infra do RabbitMQ local (Compose para dev)
 
 Antes de mexer no `order-service`, replicar o `saga-rabbitmq-coreografado/docker-compose.yml` deste PoC no ambiente de dev local. Adicionar ao `docker-compose.override.yml` do `order-service`:
 
@@ -88,7 +88,7 @@ Validação: `docker compose up rabbitmq` + abrir http://localhost:15672 (login 
 
 ---
 
-## Fase 2 — Service do worker no compose (1 dia)
+## Fase 2 — Service do worker no compose
 
 Pré-requisito: a imagem PHP do serviço precisa ter as extensões `sockets` e `bcmath` (requeridas pelo `php-amqplib`). A maioria dos stacks Laravel já tem ambas via base image compartilhada — quando esse for o caso, **não é preciso construir uma imagem nova nem adotar Dockerfile multi-stage**. O worker é só **mais um service no compose** apontando pra mesma imagem do app, com `command:` próprio.
 
@@ -120,7 +120,7 @@ O service HTTP existente (`order-service`, php-fpm) permanece como está — mes
 
 ---
 
-## Fase 3 — Instalação do pacote no `order-service` (1 dia)
+## Fase 3 — Instalação do pacote no `order-service`
 
 ```bash
 cd order-service
@@ -182,7 +182,7 @@ SAGA_DB_CONNECTION=mysql
 
 ---
 
-## Fase 4 — Definir os handlers da primeira saga (2-3 dias)
+## Fase 4 — Definir os handlers da primeira saga
 
 Vamos refatorar o endpoint atual de criação de pedido. O exemplo original (síncrono) era algo como:
 
@@ -439,7 +439,7 @@ O que coexiste sem conflito:
 
 ---
 
-## Fase 5 — Replicar wire-up no segundo serviço (`payment-service`) (1 dia)
+## Fase 5 — Replicar wire-up no segundo serviço (`payment-service`)
 
 ```bash
 cd payment-service
@@ -494,7 +494,7 @@ Tagueada no `SagaServiceProvider` do `payment-service` exatamente como no `order
 
 ---
 
-## Fase 6 — Deploy em produção (Kubernetes) (2-3 dias)
+## Fase 6 — Deploy em produção (Kubernetes)
 
 `k8s/order-service/saga-worker-deployment.yaml`:
 
@@ -541,7 +541,7 @@ spec:
 
 ---
 
-## Fase 7 — Saga Aggregator + UI de postmortem (5-7 dias) — opcional na v1
+## Fase 7 — Saga Aggregator + UI de postmortem — opcional na v1
 
 A coreografia tem postmortem distribuído: cada serviço tem seu `step_log` local. Para incidente em produção, juntar logs por `saga_id` em N serviços leva 2-15 min sem ferramenta dedicada (medição em T3.4). A solução madura é o **Saga Aggregator** — um microsserviço que assina `saga.#` (topic wildcard) e popula uma `saga_view` desnormalizada, sobre a qual roda uma UI Filament/Livewire.
 
@@ -555,7 +555,7 @@ Plano técnico completo (schema, lógica do consumer, custo) está em [`consider
 
 ---
 
-## Fase 8 — Migração de fluxos existentes (1-2 semanas)
+## Fase 8 — Migração de fluxos existentes
 
 Para cada fluxo síncrono que vira saga:
 
@@ -570,23 +570,19 @@ Para cada fluxo síncrono que vira saga:
 
 ---
 
-## Custos consolidados
+## Ordem das fases
 
-| Fase                                                     | Custo (dias eng) |
-| -------------------------------------------------------- | ---------------- |
-| 0 — Pré-requisitos (RabbitMQ + lib esqueleto)            | 1-2              |
-| 1 — Infra Compose local                                  | 1                |
-| 2 — Service do worker no compose (mesma imagem base)     | 1                |
-| 3 — Instalação no `order-service` + migrations           | 1                |
-| 4 — Refatorar primeiro fluxo para coreografia            | 2-3              |
-| 5 — Replicar no `payment-service`                        | 1                |
-| 6 — Deploy K8s (workers + secrets + HPA opcional)        | 2-3              |
-| 7 — Saga Aggregator (opcional, recomendado em prod real) | 5-7              |
-| 8 — Migração incremental de fluxos                       | 1-2 semanas/saga |
-| **Total para entrega de 1 saga em produção**             | **~10-15 dias**  |
-| **Adoção em escala (5-10 sagas + aggregator + DLQ)**     | **~6-8 semanas** |
-
-> Estimativas otimistas: assumem time com expertise prévia em PHP/Laravel/Docker/RabbitMQ. Sem expertise prévia em RabbitMQ, somar ~1 semana de onboarding.
+| Fase                                                     | Bloqueia próxima fase? |
+| -------------------------------------------------------- | ---------------------- |
+| 0 — Pré-requisitos (RabbitMQ + lib esqueleto)            | Sim                    |
+| 1 — Infra Compose local                                  | Sim                    |
+| 2 — Service do worker no compose (mesma imagem base)     | Sim                    |
+| 3 — Instalação no `order-service` + migrations           | Sim                    |
+| 4 — Refatorar primeiro fluxo para coreografia            | Sim                    |
+| 5 — Replicar no `payment-service`                        | Sim (se a saga atravessa serviço) |
+| 6 — Deploy K8s (workers + secrets + HPA opcional)        | Sim (pra produção)     |
+| 7 — Saga Aggregator (opcional, recomendado em prod real) | Não — pode entrar depois |
+| 8 — Migração incremental de fluxos                       | Não — incremental, saga por saga |
 
 ---
 

@@ -70,18 +70,17 @@ Step Functions entrega observabilidade rica em AWS real (próxima do Temporal We
 
 ---
 
-## 4. Esforço para observabilidade aceitável (estimativa)
+## 4. Componentes para observabilidade aceitável
 
-| Componente        | Esforço estimado                                 | Comparação                          |
-| ----------------- | ------------------------------------------------ | ----------------------------------- |
-| Métricas básicas  | grátis (CloudWatch)                              | RabbitMQ: 4-6h                      |
-| Timeline visual   | grátis (Step Functions Console em AWS real)      | RabbitMQ: 1 dia                     |
-| Replay/postmortem | via getExecutionHistory + reproduzir manualmente | Temporal: grátis                    |
-| Alerta de falha   | ~15 lines YAML CloudWatch Alarm + SNS            | similar a Temporal                  |
-| Search/filter     | via `listExecutions` filters                     | similar a Temporal                  |
-| **Total**         | **~0.5 dia** (em AWS real)                       | RabbitMQ ~3-5 dias; Temporal ~1 dia |
+| Componente        | Em Step Functions                                | Em RabbitMQ                       | Em Temporal               |
+| ----------------- | ------------------------------------------------ | --------------------------------- | ------------------------- |
+| Métricas básicas  | grátis (CloudWatch)                              | construir export Prometheus       | grátis (Temporal SDK)     |
+| Timeline visual   | grátis (Step Functions Console em AWS real)      | construir UI custom               | grátis (Temporal Web)     |
+| Replay/postmortem | via getExecutionHistory + reproduzir manualmente | construir replay sobre saga_events | grátis (replay nativo)    |
+| Alerta de falha   | ~15 lines YAML CloudWatch Alarm + SNS            | DLX + alerting custom             | Temporal SDK metrics + Prometheus |
+| Search/filter     | via `listExecutions` filters                     | logs estruturados + ELK           | Temporal Web search       |
 
-Custo de observabilidade no Step Functions é baixo, mas amarrado ao stack AWS.
+Trabalho de observabilidade no Step Functions é minimal (vem com a plataforma), mas amarrado ao stack AWS.
 
 ---
 
@@ -170,12 +169,12 @@ Step Functions é **always-managed**, pay-per-use. Cálculo para volume agregado
 
 Comparação:
 
-| Plataforma              | Custo 12 meses (volume agregado) |
-| ----------------------- | -------------------------------- |
-| RabbitMQ self-hosted    | $2400-4800 + ~17-23 dias eng     |
-| Temporal Cloud          | ~$58k/ano (estimado em T6.1)     |
-| Temporal self-host EKS  | $3-6k/ano + ~15-30 dias eng      |
-| Step Functions Standard | **~$51k/ano**                    |
+| Plataforma              | Custo recorrente 12 meses (infra/SaaS, volume agregado) |
+| ----------------------- | -------------------------------------------------------- |
+| RabbitMQ self-hosted    | $2400-4800                                               |
+| Temporal Cloud          | ~$58k/ano (estimado em T6.1)                             |
+| Temporal self-host EKS  | $3-6k/ano                                                |
+| Step Functions Standard | **~$51k/ano**                                            |
 
 **Step Functions é financeiramente próximo do Temporal Cloud em escala.** Vantagem: zero ops. Desvantagem: lock-in profundo + custo escala com cada transição (não com volume de "trabalho útil").
 
@@ -209,7 +208,7 @@ Comparação:
 | Postmortem                                  | 2-15 min              | 30s-1min                                   | via API/Console                                    | **Temporal / Step Functions**          |
 | Versionamento — sagas em voo                | silent corruption     | panic LOUD                                 | silent migration (LocalStack) / pinning (AWS real) | **Temporal**                           |
 | Lock-in                                     | AMQP padrão           | moderado                                   | profundo (AWS)                                     | **RabbitMQ**                           |
-| Custo financeiro 12 meses (volume agregado) | ~$3k + 17-23 dias eng | ~$58k Cloud / ~$5k self-host + 15 dias eng | ~$51k                                              | **RabbitMQ / Temporal self-host**      |
+| Custo recorrente 12 meses (infra/SaaS)      | ~$3k                  | ~$58k Cloud / ~$5k self-host               | ~$51k                                              | **RabbitMQ / Temporal self-host**      |
 | Operação                                    | clustering            | cluster ou Cloud                           | zero ops (managed)                                 | **Step Functions**                     |
 | Bus factor                                  | lib interna           | SDK público                                | AWS oficial                                        | **Step Functions**                     |
 

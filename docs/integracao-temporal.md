@@ -10,7 +10,7 @@ Premissas em vigor:
 
 ---
 
-## Fase 0 — Pré-requisitos (1-2 dias)
+## Fase 0 — Pré-requisitos
 
 Decisões de plataforma que precisam estar resolvidas antes de qualquer commit no `order-service`:
 
@@ -37,11 +37,11 @@ Decisões de plataforma que precisam estar resolvidas antes de qualquer commit n
 
 ---
 
-## Fase 1 — Infra do Temporal local (Compose para dev) (1 dia)
+## Fase 1 — Infra do Temporal local (Compose para dev)
 
 Antes de mexer no `order-service`, replicar o `saga-temporal/docker-compose.yml` deste PoC no ambiente de dev local. Adicionar ao `docker-compose.override.yml` do `order-service`:
 
-> ⚠️ **Achado relevante (revisado):** Temporal **não suporta MariaDB**. Tentativa com `mariadb:11.4` + driver `mysql8` falhou em migration de schema do auto-setup (CREATE INDEX com path JSON usa sintaxe MySQL 8 incompatível). Como esta aplicação Laravel usa MariaDB em produção, adoção de Temporal exige um SGBD adicional dedicado ao engine — o banco do `order-service` continua MariaDB; o do Temporal precisa ser **MySQL 8** (preferido — mesma família, time mantém familiaridade) ou Postgres. Custo revisado: ~3 dias eng inicial + ~$30-150/mês de RDS/Aurora MySQL 8 adicional. É um critério a mais na decisão, não bloqueador isolado. Detalhamento em `findings-temporal.md` §2.2.6.
+> ⚠️ **Achado relevante (revisado):** Temporal **não suporta MariaDB**. Tentativa com `mariadb:11.4` + driver `mysql8` falhou em migration de schema do auto-setup (CREATE INDEX com path JSON usa sintaxe MySQL 8 incompatível). Como esta aplicação Laravel usa MariaDB em produção, adoção de Temporal exige um SGBD adicional dedicado ao engine — o banco do `order-service` continua MariaDB; o do Temporal precisa ser **MySQL 8** (preferido — mesma família, time mantém familiaridade) ou Postgres. Custo: provisão de um SGBD adicional (~$30-150/mês recorrentes de RDS/Aurora MySQL 8) + uma rodada one-time de migração de schema/conexões. É um critério a mais na decisão, não bloqueador isolado. Detalhamento em `findings-temporal.md` §2.2.6.
 
 ```yaml
 services:
@@ -84,7 +84,7 @@ Validação: `docker compose up temporal` + `tctl --address localhost:7233 names
 
 ---
 
-## Fase 2 — Service do worker no compose + RoadRunner (2-3 dias)
+## Fase 2 — Service do worker no compose + RoadRunner
 
 Pré-requisito: a imagem PHP do serviço precisa ter as extensões **`grpc`** (Temporal SDK), **`sockets`**, **`pcntl`** e **`pdo_mysql`**. Diferente do modelo coreografado, `grpc` raramente vem por padrão em base images PHP — instalá-la na **base image compartilhada** do stack Laravel é o caminho de menor atrito (instalada uma vez, beneficia tanto a API quanto o worker; outros apps que ainda não usem Temporal não pagam custo de runtime, só ~30MB extras de imagem).
 
@@ -144,7 +144,7 @@ O service HTTP existente (`order-service`, php-fpm) permanece como está — mes
 
 ---
 
-## Fase 3 — Pacote interno: instalação no `order-service` (1 dia)
+## Fase 3 — Pacote interno: instalação no `order-service`
 
 ```bash
 cd order-service
@@ -182,7 +182,7 @@ TEMPORAL_TLS_KEY=/secrets/temporal-client.key
 
 ---
 
-## Fase 4 — Refatorar o endpoint de criação de pedido (2-3 dias)
+## Fase 4 — Refatorar o endpoint de criação de pedido
 
 ### 4.1 Antes (síncrono — código original simplificado)
 
@@ -374,7 +374,7 @@ class OrderActivities implements OrderActivitiesInterface
 
 ---
 
-## Fase 5 — Worker process (Artisan command) (1 dia)
+## Fase 5 — Worker process (Artisan command)
 
 ```php
 // app/Console/Commands/RunSagaWorker.php — fornecido pelo pacote interno
@@ -400,7 +400,7 @@ Local (dev): `php artisan saga:worker order-saga` em terminal separado.
 
 ---
 
-## Fase 6 — Manifestos Kubernetes (worker) (2-3 dias)
+## Fase 6 — Manifestos Kubernetes (worker)
 
 `k8s/order-service/worker-deployment.yaml`:
 
@@ -486,7 +486,7 @@ Custo: replicar Fases 2-6 em cada repo Laravel que vira "owner" de activities.
 
 ---
 
-## Fase 8 — Observabilidade e operação (3-5 dias)
+## Fase 8 — Observabilidade e operação
 
 1. **Datadog APM**: pacote interno injeta tracer no worker. Cada Activity vira span filho do workflow.
 2. **Métricas Temporal → Prometheus**: scrape do `:9090/metrics` do worker.
@@ -497,7 +497,7 @@ Custo: replicar Fases 2-6 em cada repo Laravel que vira "owner" de activities.
 
 ---
 
-## Fase 9 — Lint anti-determinismo (PHPStan custom) (3-5 dias)
+## Fase 9 — Lint anti-determinismo (PHPStan custom)
 
 Regra do pacote interno que falha CI se workflow tiver:
 
@@ -529,23 +529,20 @@ CI roda `vendor/bin/phpstan analyse app/Sagas` em PR; bloqueia merge.
 
 ---
 
-## Cronograma consolidado
+## Ordem das fases
 
-| Fase                                           | Esforço                            | Quem             |
-| ---------------------------------------------- | ---------------------------------- | ---------------- |
-| 0. Pré-requisitos (Cloud, namespace, DNS)      | 1-2 dias                           | DevOps           |
-| 1. Compose local                               | 1 dia                              | Backend          |
-| 2. `grpc` na base image + service worker no compose + `.rr.yaml` | 2-3 dias                           | Backend + DevOps |
-| 3. Pacote interno (instalação básica)          | 1 dia                              | Backend          |
-| 4. Refator do endpoint + Workflow + Activities | 2-3 dias                           | Backend          |
-| 5. Artisan command worker                      | 1 dia                              | Backend          |
-| 6. Manifestos Kubernetes                       | 2-3 dias                           | DevOps           |
-| 7. Cross-service (decisão A/B)                 | 1 dia decisão + N dias por serviço | Time + Backend   |
-| 8. Observabilidade                             | 3-5 dias                           | Backend + SRE    |
-| 9. Lint PHPStan                                | 3-5 dias                           | Backend          |
-| **Total p/ primeiro saga em prod**             | **~17-23 dias eng**                | —                |
-
-Confere com o número da `recomendacao-saga.md` §6 (custo de adoção ~1 semestre considerando rampa de aprendizado em paralelo a outras demandas).
+| Fase                                           | Quem             |
+| ---------------------------------------------- | ---------------- |
+| 0. Pré-requisitos (Cloud, namespace, DNS)      | DevOps           |
+| 1. Compose local                               | Backend          |
+| 2. `grpc` na base image + service worker no compose + `.rr.yaml` | Backend + DevOps |
+| 3. Pacote interno (instalação básica)          | Backend          |
+| 4. Refator do endpoint + Workflow + Activities | Backend          |
+| 5. Artisan command worker                      | Backend          |
+| 6. Manifestos Kubernetes                       | DevOps           |
+| 7. Cross-service (decisão A/B)                 | Time + Backend   |
+| 8. Observabilidade                             | Backend + SRE    |
+| 9. Lint PHPStan                                | Backend          |
 
 ---
 

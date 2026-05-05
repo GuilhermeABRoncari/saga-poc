@@ -41,7 +41,7 @@
 - **Notas:**
   - O cenário comum em produção (deploy enquanto sagas executam) afeta as duas plataformas. A diferença é apenas qual delas avisa.
   - Para Temporal, mitigar com `Workflow::getVersion()` é prática documentada e bem suportada.
-  - Para RabbitMQ, mitigar exige disciplina manual: campo `saga_version` na tabela + lógica condicional no orchestrator (custo: ~1 dia de eng + risco permanente de esquecer em algum deploy).
+  - Para RabbitMQ, mitigar exige disciplina manual: campo `saga_version` na tabela + lógica condicional no orchestrator (componente extra a manter + risco permanente de esquecer em algum deploy).
 
 ### T1.2 At-least-once / execução dupla no RabbitMQ (Cenário C empírico)
 
@@ -122,14 +122,14 @@
 - [skip] **Não executado nesta sessão. Estimativa preservada como prevista.**
 - **Por que não foi executado:** construir um dashboard "mínimo aceitável" honesto requer:
   1. Subir Prometheus + Grafana no compose (~30 min).
-  2. Instrumentar a lib (`SagaOrchestrator`, `ServiceWorker`) com counters e histograms expostos via HTTP por uma extensão PHP (`/metrics` endpoint). Não é trivial em PHP CLI puro — geralmente exige `prometheus_client_php` + servidor HTTP embutido. (~3-4 horas)
-  3. Definir e validar 4-5 métricas mínimas: `saga_started_total`, `saga_completed_total`, `saga_compensated_total`, `saga_failed_total`, `saga_duration_seconds_bucket`. (~1-2 horas)
-  4. Construir dashboard Grafana com queries PromQL razoáveis (sagas em andamento, % compensadas, p95 duração, breakdown por saga type). (~2-3 horas)
-  5. Validar que números fazem sentido com carga real (rodar T1.3 de novo e ver dashboard popular). (~1 hora)
-  - **Total honesto: 1-1.5 dia engenheiro só para mínimo dashboard local. Para chegar a "produção" (alertas, SLOs, retention, multi-tenant) os 3-5 dias da estimativa original ficam em pé.**
-- **O que mudou na visão depois dos testes T1-T2.3:** a estimativa original de "3-5 dias para mínimo aceitável" em [`findings-rabbitmq.md`](./findings-rabbitmq.md) §4 **continua válida** — a complexidade não está em construir cada peça, está em integrá-las e descobrir os edge cases (cardinality de labels, granularidade de buckets, semântica de "saga em andamento" sem race contra DB). Em Temporal Web UI esses 1.5 dias custam zero.
-- **Por que importa o número:** o "tempo até observabilidade decente" é o critério que mais pesa contra RabbitMQ no padrão sustentável. Não basta ter ferramentas (Prometheus + Grafana são free); o trabalho de instrumentar + manter dashboards é recorrente, e a lib precisa não regredir nos counters cada vez que muda.
-- **Resultado:** estimativa validada em mente, não em prática. Caso necessário implementar para reforçar o argumento, pode ser executado num spike isolado de 1-2 dias.
+  2. Instrumentar a lib (`SagaOrchestrator`, `ServiceWorker`) com counters e histograms expostos via HTTP por uma extensão PHP (`/metrics` endpoint). Não é trivial em PHP CLI puro — geralmente exige `prometheus_client_php` + servidor HTTP embutido.
+  3. Definir e validar 4-5 métricas mínimas: `saga_started_total`, `saga_completed_total`, `saga_compensated_total`, `saga_failed_total`, `saga_duration_seconds_bucket`.
+  4. Construir dashboard Grafana com queries PromQL razoáveis (sagas em andamento, % compensadas, p95 duração, breakdown por saga type).
+  5. Validar que números fazem sentido com carga real (rodar T1.3 de novo e ver dashboard popular).
+  - **Trabalho não-trivial mesmo para o mínimo local. Para chegar a "produção" (alertas, SLOs, retention, multi-tenant) os componentes a manter aumentam consideravelmente.**
+- **O que mudou na visão depois dos testes T1-T2.3:** a complexidade não está em construir cada peça isolada, está em integrá-las e descobrir os edge cases (cardinality de labels, granularidade de buckets, semântica de "saga em andamento" sem race contra DB). Em Temporal Web UI esse trabalho custa zero ao adotador.
+- **Por que importa o número de componentes:** o "componentes próprios até observabilidade decente" é o critério que mais pesa contra RabbitMQ no padrão sustentável. Não basta ter ferramentas (Prometheus + Grafana são free); o trabalho de instrumentar + manter dashboards é recorrente, e a lib precisa não regredir nos counters cada vez que muda.
+- **Resultado:** análise validada em mente, não em prática. Caso necessário implementar para reforçar o argumento, pode ser executado num spike isolado.
 - **Notas:** atualmente Temporal Web UI já entrega timeline/replay/search out-of-the-box. RabbitMQ Mgmt UI mostra **filas** (transport-level), não **sagas** (semantic-level). Construir o segundo é o trabalho recorrente.
 
 ### T2.2 Alerta "compensação falhou" em ambos
@@ -332,9 +332,9 @@
   | Replay programático | não | sim |
   | Search/filter | SQL custom | List Filter Query syntax |
   | Tempo prático para postmortem | 2-15min (varia muito) | 30s-1min |
-- **Veredito:** Temporal vence claramente em **profundidade de informação** e **DX**. RabbitMQ entrega o básico rápido (status+path) mas depende de logs e instrumentação extra para ir além. Para múltiplos serviços com vários times diferentes investigando incidentes, a diferença vira **dias de produtividade ao longo de meses**.
+- **Veredito:** Temporal vence claramente em **profundidade de informação** e **DX**. RabbitMQ entrega o básico rápido (status+path) mas depende de logs e instrumentação extra para ir além. Para múltiplos serviços com vários times diferentes investigando incidentes, a diferença vira **fricção recorrente** que custa investigação a cada incidente.
 - **Notas:**
-  - Para chegar à paridade, RabbitMQ precisaria: tabela `saga_events` append-only (~1-2 dias eng), payloads persistidos em colunas adicionais, integração com ELK/Loki para correlacionar logs cross-service. Custo cumulativo.
+  - Para chegar à paridade, RabbitMQ precisaria: tabela `saga_events` append-only, payloads persistidos em colunas adicionais, integração com ELK/Loki para correlacionar logs cross-service. Componentes adicionais a construir e manter.
   - **Item-chave para reforçar nas considerações:** o gap não é "Temporal tem timeline visual"; é "Temporal tem TODOS os payloads consultáveis sem ter previsto que iam ser consultados".
 
 ---
@@ -386,7 +386,7 @@
   1. Try/catch em todas as queries com retry exponencial. (~10 LOC)
   2. Health-check periódico do DB com circuit breaker. (~30 LOC)
   3. Modo "degradado" que para de aceitar novas sagas quando storage indisponível, em vez de aceitar e perder. (~20 LOC)
-  - **Estimativa total: ~1 dia de eng**, mais um item para a lista de débitos pré-produção.
+  - **No total, ~60 LOC adicionais a construir e testar**, mais um item para a lista de débitos pré-produção.
 
 ### T4.3 Falha em step 1 (compensação trivial)
 
@@ -430,7 +430,7 @@
     - Timeout via `pcntl_alarm` ou exec em subprocess. (~30-50 LOC + edge cases).
     - Distinção entre "timeout" e "exception" no event emitido. (~5 LOC).
     - Documentação para devs definirem timeouts apropriados por handler.
-  - **Custo estimado para atingir paridade: ~1 dia de eng + disciplina permanente.**
+  - **Para atingir paridade: componente extra a construir + disciplina permanente.**
 - **Comparação:**
   | | Temporal | RabbitMQ (PoC) |
   |---|---|---|
@@ -473,8 +473,8 @@
     5. `SagaOrchestrator::handleEvent` e `dispatchStep`: ler `$state['version']` e despachar para `definition($version)` em vez de `definition()`. (~5 LOC)
     6. `Saga::definition` vira `definition(int $version): array` e cada saga concreta passa a ter `match` ou `if` selecionando a versão. (~10 LOC por saga + boilerplate)
     7. Convenção de "promoção de versão" para garantir que dev incremente `currentVersion()` ao adicionar branch nova. (sem código — disciplina + ADR + lint custom)
-  - **Estimativa total:** ~25-30 LOC na lib + ~10 LOC por saga concreta + lint PHPStan para detectar mudanças sem promoção de versão (~1-2 dias de eng).
-  - **Custo recorrente:** cada saga nova precisa pensar em versionamento desde o dia 1 (mesmo se nunca for usar). Em Temporal, custo aparece só quando precisa.
+  - **Total da mitigação:** ~25-30 LOC na lib + ~10 LOC por saga concreta + lint PHPStan para detectar mudanças sem promoção de versão.
+  - **Custo recorrente:** cada saga nova precisa pensar em versionamento desde o início (mesmo se nunca for usar). Em Temporal, custo aparece só quando precisa.
 - **Comparação direta:**
   - **Detecção de divergência:** Temporal detecta automaticamente; RabbitMQ exige disciplina humana (lint).
   - **LOC para mitigar:** Temporal 4 LOC inline; RabbitMQ 25-30 LOC de infra + 10 LOC por saga.
@@ -482,7 +482,7 @@
   - **DX em code review:** ambos exigem reviewer atento (em Temporal, ver se getVersion foi usado; em RabbitMQ, ver se currentVersion foi promovido). Empate.
 - **Notas:**
   - O resultado do Temporal **valida totalmente** a hipótese 2.1.5 de [`consideracoes.md`](./consideracoes.md): versionamento explícito é custoso mas honesto.
-  - O contraste com T1.1 (sem mitigação): Temporal panic loud × RabbitMQ silent failure. Com mitigação aplicada (T1.5): Temporal funciona com 4 LOC × RabbitMQ exigiria infra extra de 1-2 dias.
+  - O contraste com T1.1 (sem mitigação): Temporal panic loud × RabbitMQ silent failure. Com mitigação aplicada (T1.5): Temporal funciona com 4 LOC × RabbitMQ exigiria construir infra extra (versionamento + lint + disciplina).
   - **A vitória de Temporal aqui não é sobre o "happy path" de versionamento (ambos podem ser feitos)**: é que Temporal entrega a infra grátis enquanto RabbitMQ exige construção + disciplina permanente.
 
 ---
@@ -521,7 +521,7 @@
 - **Comparação direta:**
   - **Temporal:** falha LOUD, explícita, com mensagem clara. Workflow stuck (precisa intervenção). State preserved.
   - **RabbitMQ:** falha SILENT, marca SUCESSO falso, state corrompido. Em produção: estoque reservado 2x, pagamento NUNCA cobrado, pedido marcado completo. **Pior cenário possível para padrão sustentável.**
-- **Veredito:** este teste é o argumento mais forte a favor do Temporal no eixo "correção sob mudança de código". Demonstrou empiricamente que **RabbitMQ-PoC produz silent corruption em mudança comum (reordenar steps)**. Mitigação requer disciplina permanente + lint + saga_version (~1-2 dias eng inicial), e mesmo assim depende de o dev lembrar.
+- **Veredito:** este teste é o argumento mais forte a favor do Temporal no eixo "correção sob mudança de código". Demonstrou empiricamente que **RabbitMQ-PoC produz silent corruption em mudança comum (reordenar steps)**. Mitigação requer disciplina permanente + lint + saga_version, e mesmo assim depende de o dev lembrar.
 - **Notas:**
   - Mesmo padrão de panic visto no T1.1 (adição de step), mas T5.1 mostra mais especificamente: a mensagem do TMPRL1100 inclui ActivityType esperado vs encontrado, facilitando diagnose.
   - Em RabbitMQ, sem o `saga_version` da §1.2.8 / mitigação 1.3, qualquer reordenação de step durante deploy reproduz esta corrupção.
@@ -570,8 +570,8 @@
   - Volume mensal estimado: ~17M sagas × ~7 actions = **~120M actions/mês**.
   - Tier "Essentials" cobre ~10M actions/mês ($100). Acima disso, ~$0.04 por 1000 actions.
   - Cálculo grosseiro: 120M actions × $0.04/1000 = **~$4800/mês** em Cloud.
-  - Comparado a self-host estimado de $250-500/mês infra + 1-2 dias eng/mês.
-- **Implicação:** para o volume esperado, **Temporal Cloud fica caro rapidamente** (~$58k/ano). Self-host é a opção financeira sensata para escala >10M actions/mês. A vantagem operacional do Cloud aparece só durante adoção (primeiros 6-12 meses).
+  - Comparado a self-host estimado de $250-500/mês de infra recorrente, mais carga operacional contínua de SRE.
+- **Implicação:** para o volume esperado, **Temporal Cloud fica caro rapidamente** (~$58k/ano). Self-host é a opção financeira sensata para escala >10M actions/mês. A vantagem operacional do Cloud aparece só durante adoção.
 - **Resultado:** validar números com teste real depois que decisão for tomada (se Temporal escolhido, rodar antes de assinar).
 
 ### T6.2 Overhead de p99 fim-a-fim
