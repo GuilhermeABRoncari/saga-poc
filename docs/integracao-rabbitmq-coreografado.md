@@ -18,6 +18,7 @@ Premissas em vigor:
 Decisões de plataforma que precisam estar resolvidas antes de qualquer commit:
 
 1. **RabbitMQ 4.3+ provisionado** com plugins `management` e `prometheus` habilitados:
+
    - Single-node aceitável para começar (Khepri default; mirrored queues removidas em 4.0).
    - Para HA em produção real: cluster 3 nós com quorum queues — testes de failover de líder Raft em [`findings-rabbitmq.md`](./findings-rabbitmq.md) §7.2.
 
@@ -39,8 +40,10 @@ Decisões de plataforma que precisam estar resolvidas antes de qualquer commit:
 
 3. **Convenção de nomes de evento** combinada com o time:
    - Domínio: `<bounded-context>.<event>` (ex.: `stock.reserved`, `credit.charged`, `email.verified`).
+   - Início de fluxo: `saga.started.<flow>` — o sufixo `<flow>` (ex.: `create_order`, `refund_order`, `activate_store`) é o que **multiplexa fluxos distintos** sobre a mesma lib e o mesmo broker. Cada `<flow>` corresponde a uma cadeia de `react()` independente.
    - Falha: `saga.failed` (fanout para todos os consumers que assinam).
-   - Sucesso terminal: `saga.completed` (informativo; consumido apenas por aggregator/observabilidade).
+   - Sucesso terminal: `saga.completed.<flow>` (informativo; consumido apenas por aggregator/observabilidade).
+   - **Isolamento por instância:** `saga_id` (UUID gerado por requisição) é a única dimensão que separa execuções concorrentes — vale tanto entre sagas do mesmo `<flow>` quanto entre `<flow>`s diferentes. As tabelas `saga_step_log` e `saga_compensation_log` têm PK `(saga_id, step)`, então N sagas coexistem naturalmente.
 
 ---
 
@@ -285,6 +288,52 @@ public function handle(EventBus $bus, SagaLog $log): int
 
 Validação: rodar `php artisan saga:listen` em foreground + abrir Management UI em http://localhost:15672 — bindings e queue durável aparecem. Disparar saga via `curl -X POST /orders` deve persistir step_log no banco do `order-service`.
 
+### 4.5 Múltiplas sagas no mesmo worker
+
+Um único worker do `order-service` pode participar de **N sagas distintas em paralelo** — basta encadear mais `react()` no `SagaListener`. Cada saga é um fluxo independente identificado pelo prefixo `saga.started.<flow>`, e instâncias concorrentes do mesmo fluxo são isoladas por `saga_id`:
+
+```php
+// vendor/acme/laravel-saga/src/Console/RunWorkerCommand.php
+public function handle(EventBus $bus, SagaLog $log): int
+{
+    (new SagaListener(config('saga.service_name'), $bus, $log))
+        // Saga A — criação de pedido
+        ->react(
+            event: 'saga.started.create_order',
+            stepName: 'reserve_stock',
+            emit: 'stock.reserved',
+            handler: app(ReserveStockHandler::class),
+        )
+        ->react(
+            event: 'credit.charged',
+            stepName: 'confirm_shipping',
+            emit: 'saga.completed.create_order',
+            handler: app(ConfirmShippingHandler::class),
+        )
+        ->compensate('reserve_stock', app(ReleaseStockCompensation::class))
+
+        // Saga B — devolução de pedido (mesmo serviço, fluxo independente)
+        ->react(
+            event: 'saga.started.refund_order',
+            stepName: 'restock_items',
+            emit: 'items.restocked',
+            handler: app(RestockItemsHandler::class),
+        )
+        ->compensate('restock_items', app(UnrestockItemsCompensation::class))
+
+        ->listen(config('saga.queue_name'));
+    return self::SUCCESS;
+}
+```
+
+O que coexiste sem conflito:
+
+- **Mesma queue `order-service.saga`** recebe eventos de `create_order` e `refund_order` — o roteamento por `routing_key` no topic exchange separa.
+- **Mesmas tabelas `saga_step_log` / `saga_compensation_log`** servem aos dois fluxos — PK `(saga_id, step)` garante isolamento; não há colisão mesmo se ambos os fluxos tiverem um `step` chamado `reserve_stock`, porque `saga_id` difere.
+- **Workers continuam stateless** — adicionar uma 3ª saga é só mais um `->react()` no chain + deploy do worker; nenhuma mudança em broker, banco ou config.
+
+> **Limite prático:** quando o número de fluxos por serviço passa de ~5-6, a leitura do `RunWorkerCommand` degrada. Padrão recomendado: extrair cada saga para uma classe `App\Saga\Definitions\<Flow>SagaDefinition` que recebe o `SagaListener` e registra seus próprios `react()`/`compensate()`. O `RunWorkerCommand` vira um agregador.
+
 ---
 
 ## Fase 5 — Replicar wire-up no segundo serviço (`payment-service`) (1 dia)
@@ -317,6 +366,8 @@ Wire-up dos handlers do `payment-service`:
 ```
 
 > **Acoplamento por convenção, não por tipo:** os nomes de evento (`stock.reserved`, `credit.charged`) são contratos implícitos entre serviços. Para reduzir risco de quebra silenciosa, recomenda-se adicionalmente um pacote `acme/saga-contracts` com **PHP DTOs versionados** compartilhados via Composer (mesma lógica do orquestrado, ver `integracao-rabbitmq.md` Fase 7).
+
+> **Cada serviço, sua queue, suas N sagas:** a convenção `<service>.saga` (ex.: `order-service.saga`, `payment-service.saga`, `<outro>.saga`) garante que cada app tenha sua queue durável independente — falha de um worker não afeta o backlog dos outros. Dentro de cada queue, o serviço participa de **quantos `<flow>`s precisar** sem nova infra: basta adicionar `react()` no chain (Fase 4.5). Em monorepo PHP/Laravel com múltiplos apps, isso significa que cada app tem 1 worker daemon, mas pode ser citado em N sagas organizacionais — não há limite estrutural.
 
 ---
 
