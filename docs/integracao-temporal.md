@@ -84,43 +84,44 @@ Validação: `docker compose up temporal` + `tctl --address localhost:7233 names
 
 ---
 
-## Fase 2 — Imagem Docker da aplicação (PHP + grpc + RoadRunner) (2-3 dias)
+## Fase 2 — Service do worker no compose + RoadRunner (2-3 dias)
 
-A imagem atual do `order-service` (php-fpm) não consegue rodar workers Temporal — falta extensão `grpc` e o worker precisa ser long-running com loop próprio (RoadRunner).
+Pré-requisito: a imagem PHP do serviço precisa ter as extensões **`grpc`** (Temporal SDK), **`sockets`**, **`pcntl`** e **`pdo_mysql`**. Diferente do modelo coreografado, `grpc` raramente vem por padrão em base images PHP — instalá-la na **base image compartilhada** do stack Laravel é o caminho de menor atrito (instalada uma vez, beneficia tanto a API quanto o worker; outros apps que ainda não usem Temporal não pagam custo de runtime, só ~30MB extras de imagem).
 
-**Estratégia**: duas imagens, mesmo Dockerfile multi-stage.
+> **Adicionar `grpc` à base image** (uma vez, no Dockerfile da base PHP do stack):
+>
+> ```dockerfile
+> RUN apk add --no-cache linux-headers zlib-dev libstdc++ $PHPIZE_DEPS \
+>  && pecl install grpc \
+>  && docker-php-ext-enable grpc \
+>  && docker-php-ext-install sockets pcntl \
+>  && apk del $PHPIZE_DEPS \
+>  && apk add --no-cache libstdc++ zlib
+> ```
+>
+> Equivalente em base Debian-based: `apt-get install -y libstdc++6 zlib1g-dev` + `pecl install grpc` + `docker-php-ext-enable grpc`.
 
-`order-service/Dockerfile`:
+Com a base image preparada, **o worker é só mais um service no compose** apontando pra mesma imagem do app, com binário do RoadRunner sobreposto via `COPY` e `command:` próprio. Mesmo padrão dos demais processos long-running de aplicações Laravel (workers de fila, jobs agendados em loop, etc.) — o que muda é o entrypoint.
 
-```dockerfile
-# === Stage base: extensões PHP comuns aos dois alvos ===
-FROM php:8.3-cli-alpine AS base
-RUN apk add --no-cache git unzip linux-headers zlib-dev libstdc++ $PHPIZE_DEPS \
- && pecl install grpc \
- && docker-php-ext-enable grpc \
- && docker-php-ext-install sockets pcntl pdo_mysql \
- && apk del $PHPIZE_DEPS \
- && apk add --no-cache libstdc++ zlib
+`docker-compose.development.yml` (ou equivalente do app):
 
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
-WORKDIR /app
-COPY composer.json composer.lock ./
-RUN composer install --no-interaction --prefer-dist --no-scripts --no-dev
-COPY . .
-RUN composer dump-autoload -o
-
-# === Stage api: php-fpm para requests HTTP ===
-FROM base AS api
-RUN apk add --no-cache nginx supervisor
-# config nginx + php-fpm como hoje
-CMD ["/usr/bin/supervisord"]
-
-# === Stage worker: RoadRunner para workflows/activities ===
-FROM ghcr.io/roadrunner-server/roadrunner:2024.3 AS rr
-FROM base AS worker
-COPY --from=rr /usr/bin/rr /usr/bin/rr
-COPY .rr.yaml ./
-CMD ["rr", "serve", "-c", ".rr.yaml"]
+```yaml
+order-service-saga-worker:
+  build:
+    dockerfile_inline: |
+      FROM <imagem-base-php-do-app>:latest
+      COPY --from=ghcr.io/roadrunner-server/roadrunner:2024.3 /usr/bin/rr /usr/bin/rr
+      COPY .rr.yaml ./
+  command: rr serve -c .rr.yaml
+  working_dir: /order-service
+  volumes:
+    - ./order-service:/order-service
+  environment:
+    <<: *order_service_envs
+    TEMPORAL_ADDRESS: temporal:7233
+  restart: always
+  depends_on:
+    - temporal
 ```
 
 `.rr.yaml` (referência: `saga-temporal/.rr.yaml` deste PoC):
@@ -135,7 +136,11 @@ temporal:
   activities: { num_workers: 4 }
 ```
 
-CI publica duas tags: `order-service:1.x.y-api` e `order-service:1.x.y-worker`.
+O service HTTP existente (`order-service`, php-fpm) permanece como está — mesma imagem, `command:` padrão. O worker compartilha código, configs, conexão de banco e `.env` por volume; só diverge no entrypoint (php-fpm vs `rr serve`).
+
+**Quando migrarem pra K8s/EKS**: o mesmo padrão se traduz em dois `Deployment`s apontando pra mesma `image:`, com `command:`/`args:` diferentes (`["php-fpm"]` vs `["rr", "serve", "-c", ".rr.yaml"]`). Não é preciso quebrar em duas tags no registry — escala, rollout, livenessProbe e HPA continuam independentes porque são objetos K8s distintos.
+
+> **Quando consideraria multi-stage `-api`/`-worker` separado**: se a base image fosse muito grande e a API rodasse em ambiente onde footprint importasse muito (ex.: Lambda/Fargate cobrando por GB de imagem), separar permitiria que a API não carregasse `grpc`. No padrão Swarm/EKS com nodes long-lived, essa diferença de ~30MB é irrelevante e o custo de manter duas pipelines de build supera o ganho.
 
 ---
 
@@ -414,8 +419,8 @@ spec:
     spec:
       containers:
         - name: worker
-          image: registry.example.com/order-service:1.x.y-worker
-          command: ["php", "artisan", "saga:worker", "order-saga"]
+          image: registry.example.com/order-service:1.x.y
+          command: ["rr", "serve", "-c", ".rr.yaml"]
           env:
             - { name: TEMPORAL_ADDRESS, value: "app.tmprl.cloud:7233" }
             - { name: TEMPORAL_NAMESPACE, value: "app-prod" }
@@ -530,7 +535,7 @@ CI roda `vendor/bin/phpstan analyse app/Sagas` em PR; bloqueia merge.
 | ---------------------------------------------- | ---------------------------------- | ---------------- |
 | 0. Pré-requisitos (Cloud, namespace, DNS)      | 1-2 dias                           | DevOps           |
 | 1. Compose local                               | 1 dia                              | Backend          |
-| 2. Dockerfile multi-stage + RoadRunner         | 2-3 dias                           | Backend + DevOps |
+| 2. `grpc` na base image + service worker no compose + `.rr.yaml` | 2-3 dias                           | Backend + DevOps |
 | 3. Pacote interno (instalação básica)          | 1 dia                              | Backend          |
 | 4. Refator do endpoint + Workflow + Activities | 2-3 dias                           | Backend          |
 | 5. Artisan command worker                      | 1 dia                              | Backend          |
@@ -546,7 +551,8 @@ Confere com o número da `recomendacao-saga.md` §6 (custo de adoção ~1 semest
 
 ## Checklist mínimo pra dar `git push` da PR de adoção
 
-- [ ] Imagem worker buildada e publicada em registry.
+- [ ] Extensão `grpc` adicionada à base image PHP do stack (uma vez, beneficia API e worker).
+- [ ] Service `*-saga-worker` declarado no compose (dev) e Deployment correspondente em K8s, ambos reaproveitando a imagem do app com `command:`/`args:` `rr serve -c .rr.yaml` (RoadRunner sobreposto via `COPY` no service do compose, ou já presente na imagem em build de prod).
 - [ ] Namespace Temporal (Cloud ou self-host) acessível do cluster Kubernetes.
 - [ ] mTLS cert montado como Secret no Kubernetes.
 - [ ] `php artisan saga:worker order-saga` rodando ≥2 replicas.
