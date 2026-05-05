@@ -10,7 +10,8 @@
     "autoload": {
         "psr-4": {
             "Mobilestock\\SagaCoreografada\\": "src/Lib/",
-            "App\\Handlers\\": "src/Handlers/"
+            "App\\Handlers\\": "src/Handlers/",
+            "App\\Sagas\\": "src/Sagas/"
         }
     },
     "config": {

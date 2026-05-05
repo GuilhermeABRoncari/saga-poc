@@ -6,9 +6,11 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use App\Handlers\ServiceB\ChargeCreditHandler;
 use App\Handlers\ServiceB\RefundCreditCompensation;
+use App\Sagas\ServiceB\CreateOrderSaga;
 use Mobilestock\SagaCoreografada\EventBus;
 use Mobilestock\SagaCoreografada\SagaListener;
 use Mobilestock\SagaCoreografada\SagaLog;
+use Mobilestock\SagaCoreografada\SagaRegistry;
 
 $bus = new EventBus(
     host: $_ENV['AMQP_HOST'] ?? 'localhost',
@@ -19,7 +21,15 @@ $bus = new EventBus(
 
 $log = new SagaLog($_ENV['SAGA_DB'] ?? __DIR__ . '/../storage/service-b.sqlite');
 
-(new SagaListener('service-b', $bus, $log))
-    ->react('stock.reserved', 'charge_credit', 'credit.charged', new ChargeCreditHandler())
-    ->compensate('charge_credit', new RefundCreditCompensation())
-    ->listen('service-b.saga');
+$registry = (new SagaRegistry())->add(
+    new CreateOrderSaga(
+        new ChargeCreditHandler(),
+        new RefundCreditCompensation(),
+    ),
+);
+
+$listener = new SagaListener('service-b', $bus, $log);
+foreach ($registry->all() as $definition) {
+    $definition->register($listener);
+}
+$listener->listen('service-b.saga');
