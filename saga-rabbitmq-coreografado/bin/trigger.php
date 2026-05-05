@@ -5,7 +5,6 @@ declare(strict_types=1);
 require __DIR__ . '/../vendor/autoload.php';
 
 use Mobilestock\SagaCoreografada\EventBus;
-use Ramsey\Uuid\Uuid;
 
 $bus = new EventBus(
     host: $_ENV['AMQP_HOST'] ?? 'localhost',
@@ -14,8 +13,7 @@ $bus = new EventBus(
     pass: $_ENV['AMQP_PASS'] ?? 'guest',
 );
 
-$sagaId = Uuid::uuid4()->toString();
-$bus->publish('saga.started', $sagaId, [
+$sagaId = $bus->startSaga('create_order', [
     'product_id' => 'p_' . random_int(100, 999),
     'quantity' => 2,
     'user_id' => 'u_' . random_int(100, 999),

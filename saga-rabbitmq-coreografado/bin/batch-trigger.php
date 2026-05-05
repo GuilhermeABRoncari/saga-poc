@@ -5,7 +5,6 @@ declare(strict_types=1);
 require __DIR__ . '/../vendor/autoload.php';
 
 use Mobilestock\SagaCoreografada\EventBus;
-use Ramsey\Uuid\Uuid;
 
 $count = (int) ($argv[1] ?? 100);
 
@@ -18,8 +17,7 @@ $bus = new EventBus(
 
 $start = microtime(true);
 for ($i = 0; $i < $count; $i++) {
-    $sagaId = Uuid::uuid4()->toString();
-    $bus->publish('saga.started', $sagaId, [
+    $bus->startSaga('create_order', [
         'product_id' => 'p_' . random_int(100, 999),
         'quantity' => 2,
         'user_id' => 'u_' . random_int(100, 999),

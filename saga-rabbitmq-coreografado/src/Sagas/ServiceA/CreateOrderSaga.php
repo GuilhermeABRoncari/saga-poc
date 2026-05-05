@@ -22,7 +22,7 @@ final class CreateOrderSaga extends SagaDefinition
     {
         $listener
             ->react(
-                event: 'saga.started',
+                event: 'saga.started.create_order',
                 stepName: 'reserve_stock',
                 emit: 'stock.reserved',
                 handler: $this->reserveStock,
@@ -30,7 +30,7 @@ final class CreateOrderSaga extends SagaDefinition
             ->react(
                 event: 'credit.charged',
                 stepName: 'confirm_shipping',
-                emit: 'saga.completed',
+                emit: 'saga.completed.create_order',
                 handler: $this->confirmShipping,
             )
             ->compensate('reserve_stock', $this->releaseStock);

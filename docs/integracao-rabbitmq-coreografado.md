@@ -2,7 +2,7 @@
 
 Como adotar a abordagem **RabbitMQ + lib coreografada** como padrão organizacional em uma aplicação Laravel rodando em Docker Swarm. Documento simétrico a [`integracao-rabbitmq.md`](./integracao-rabbitmq.md) (orquestrado), [`integracao-temporal.md`](./integracao-temporal.md) e [`integracao-step-functions.md`](./integracao-step-functions.md), mas para o modelo **coreografado** validado em [`saga-rabbitmq-coreografado/`](../saga-rabbitmq-coreografado/).
 
-O exemplo concreto usado ao longo deste guia é um fluxo de criação de pedido com reserva de estoque + cobrança + confirmação, implementado como uma cadeia de eventos: `saga.started → stock.reserved → credit.charged → saga.completed`.
+O exemplo concreto usado ao longo deste guia é um fluxo de criação de pedido com reserva de estoque + cobrança + confirmação, implementado como uma cadeia de eventos: `saga.started.create_order → stock.reserved → credit.charged → saga.completed.create_order`.
 
 Premissas em vigor:
 
@@ -197,8 +197,7 @@ Problemas: timeout do request; rollback de DB não desfaz `payment.charge` se `s
 // app/Http/Controllers/OrderController.php
 public function create(Request $request, EventBus $bus)
 {
-    $sagaId = (string) Str::uuid();
-    $bus->publish('saga.started.create_order', $sagaId, [
+    $sagaId = $bus->startSaga('create_order', [
         'items' => $request->input('items'),
         'payment' => $request->input('payment'),
         'user_id' => $request->user()->id,
@@ -206,6 +205,8 @@ public function create(Request $request, EventBus $bus)
     return response()->json(['saga_id' => $sagaId], 202);
 }
 ```
+
+> `startSaga($flow, $payload)` é o entrypoint correto **apenas no ponto de origem** da saga. Internamente ele gera o `sagaId` (UUID), publica `saga.started.<flow>` e retorna o `sagaId` pra logging/rastreio. Para propagar steps no meio do fluxo (dentro de handlers reagindo a eventos), continua-se usando `publish($eventType, $sagaId, $payload)` com o `sagaId` recebido — preservar o `sagaId` entre eventos é o que costura o `step_log`/`compensation_log` dos serviços envolvidos.
 
 ### 4.3 Handlers de step e compensação no `order-service`
 
@@ -607,6 +608,115 @@ Para cada fluxo síncrono que vira saga:
 | Custo de adoção (1 saga em prod)    | ~12-18 dias                                   | ~10-15 dias                                       |
 | Risco T5.1 (silent corruption)      | sim                                           | n/a (estruturalmente seguro)                      |
 | Latência sequencial (medido em PoC) | p99 23.8 ms                                   | p99 20.4 ms (~15% mais rápido)                    |
+
+---
+
+## Fluxograma de referência rápida
+
+Dois mecanismos ortogonais coordenam uma saga coreografada. Eles atendem perguntas diferentes; os dois precisam estar certos pra saga funcionar:
+
+| Mecanismo                        | Pergunta que responde                              | Onde mora                                                                                                                  |
+| -------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Nome do evento** (routing key) | "_Quem_ recebe esta mensagem?"                     | Bindings no RabbitMQ + string em `react(event:…)` e `publish()`                                                            |
+| **sagaId** (correlation ID)      | "_Qual instância_ da saga esta mensagem pertence?" | UUID gerado por `startSaga()` no disparo, propagado em todo `publish()` subsequente; PK em `step_log` e `compensation_log` |
+
+### Eixo 1 — Nome do evento decide o roteamento
+
+Para o fluxo `create_order` do exemplo do guia:
+
+```
+                     ┌────────────────────── topic exchange "saga.events" ──────────────────────┐
+                     │                                                                          │
+   ┌─────────────────┴──┐                                                              ┌────────┴───────────┐
+   │ order-service.saga │                                                              │ payment-service.saga│
+   │ (queue do worker)  │                                                              │ (queue do worker)   │
+   └────────────────────┘                                                              └────────────────────┘
+   bound on routing keys:                                                              bound on routing keys:
+     • saga.started.create_order                                                         • stock.reserved
+     • credit.charged                                                                    • saga.failed
+     • saga.failed                                                                       (e do(s) flow(s) em que
+     (e demais eventos                                                                     o payment-service participa)
+      em que o order-service
+      reage)
+
+
+  Caminho de uma saga create_order:
+
+  controller ──startSaga('create_order')──▶ publish "saga.started.create_order"
+                                                    │
+                                                    ▼ (broker entrega na queue do order-service)
+                                            order-service worker
+                                            • react('saga.started.create_order') → ReserveStockHandler
+                                            • publish "stock.reserved"
+                                                    │
+                                                    ▼ (broker entrega na queue do payment-service)
+                                            payment-service worker
+                                            • react('stock.reserved') → ChargeCreditHandler
+                                            • publish "credit.charged"
+                                                    │
+                                                    ▼ (broker entrega na queue do order-service)
+                                            order-service worker
+                                            • react('credit.charged') → ConfirmShippingHandler
+                                            • publish "saga.completed.create_order"
+                                                    │
+                                                    ▼
+                                            (consumido por aggregator/observabilidade,
+                                             não por nenhum step ativo)
+```
+
+A única coisa que liga os serviços é **a string da routing key igual nos dois lados**: o produtor publica com aquela string, o consumidor declarou `react(event: 'mesma-string')` e bindou a queue dele com aquela string. Não há registry, não há descoberta, não há handshake — é puro roteamento por broker.
+
+### Eixo 2 — sagaId costura os efeitos da mesma instância de saga
+
+Considere duas chamadas paralelas a `POST /orders` disparando duas instâncias do mesmo flow:
+
+```
+   Instância X                                                Instância Y
+   ───────────                                                ───────────
+
+   sagaId=abc-111                                             sagaId=def-222
+   payload={items:[a,b], user:42}                             payload={items:[c],   user:99}
+
+   evento "saga.started.create_order"                         evento "saga.started.create_order"
+   evento "stock.reserved"                                    evento "stock.reserved"
+   evento "credit.charged"                                    evento "credit.charged"
+   evento "saga.completed.create_order"                       evento "saga.completed.create_order"
+
+   ┌─── as duas instâncias compartilham as MESMAS routing keys; ───┐
+   │   o broker entrega tudo nas mesmas queues, intercalado.       │
+   └───────────────────────────────────────────────────────────────┘
+
+   Cada serviço grava no seu banco local:
+
+   order-service.step_log                       payment-service.step_log
+   ┌─────────────────┬───────────────────┐      ┌─────────────────┬───────────────────┐
+   │ saga_id         │ step              │      │ saga_id         │ step              │
+   ├─────────────────┼───────────────────┤      ├─────────────────┼───────────────────┤
+   │ abc-111         │ reserve_stock     │      │ abc-111         │ charge_credit     │
+   │ abc-111         │ confirm_shipping  │      │ def-222         │ charge_credit     │
+   │ def-222         │ reserve_stock     │      └─────────────────┴───────────────────┘
+   │ def-222         │ confirm_shipping  │
+   └─────────────────┴───────────────────┘
+
+   Quando saga.failed chega com sagaId=abc-111:
+   • order-service roda runCompensations(sagaId=abc-111)
+     → wasStepDone(abc-111, reserve_stock)? sim → ReleaseStockCompensation rodada
+     → wasStepDone(abc-111, confirm_shipping)? talvez sim, talvez não
+       (depende de quando a falha aconteceu)
+   • payment-service roda runCompensations(sagaId=abc-111)
+     → wasStepDone(abc-111, charge_credit)? sim → RefundCreditCompensation rodada
+
+   A instância Y (sagaId=def-222) é completamente intocada — sagaId distingue
+   uma execução da outra mesmo dentro do mesmo serviço, mesma queue, mesma rotina.
+```
+
+### Resumo mental
+
+> **Routing key = qual serviço recebe. sagaId = qual instância está sendo processada.**
+>
+> A routing key é o _contrato cross-service_ (acoplamento por convenção: um serviço produz, outro consome a mesma string). O sagaId é o _correlation key_ dentro de cada serviço (chave que liga linhas em `step_log`/`compensation_log` da mesma execução).
+>
+> Errar a routing key = mensagem não chega no consumidor (saga trava). Errar o sagaId (gerar novo no meio do fluxo, ou perder o existente) = mensagem chega no consumidor mas as tabelas locais não correlacionam (compensação não acha o que desfazer). Por isso `startSaga()` só é usado no disparo, e `publish()` no meio do fluxo recebe o sagaId que veio de fora — nunca gera um novo.
 
 ---
 

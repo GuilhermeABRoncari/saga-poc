@@ -99,7 +99,7 @@ Tarefa: inserir um step `audit_log` (e sua compensação `unaudit_log`) entre `c
 | Modelo                    | Arquivos tocados | LOC tocadas (aprox.) | Local da mudança                                                                        | Reviewer entende sem rodar?                                                                                                                                       |
 | ------------------------- | ---------------- | -------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **RabbitMQ orquestrado**  | 3                | ~37                  | Centralizado em `definition()` + 2 arquivos de handler                                  | Sim — basta ler o array de `Step` na ordem.                                                                                                                       |
-| **RabbitMQ coreografado** | 3                | ~33                  | Distribuído: 2 handlers novos + 2 chamadas `react()` em `bin/service-a.php` reordenadas | Parcial — reviewer precisa montar mentalmente a cadeia de eventos (`saga.started → … → audit.logged → saga.completed`); não há "definição central" para conferir. |
+| **RabbitMQ coreografado** | 3                | ~33                  | Distribuído: 2 handlers novos + 2 chamadas `react()` em `bin/service-a.php` reordenadas | Parcial — reviewer precisa montar mentalmente a cadeia de eventos (`saga.started.<flow> → … → audit.logged → saga.completed.<flow>`); não há "definição central" para conferir. |
 | **Temporal**              | 3                | ~30                  | Centralizado em `execute()` + 2 métodos novos na interface/implementação                | Sim — `execute()` é leitura linear; `addCompensation` deixa LIFO óbvio.                                                                                           |
 | **Step Functions**        | 3-4              | ~50+                 | Centralizado em `state-machine.json` + 1 handler PHP + atualizar bootstrap/ARN          | Verboso — ASL exige Catch chain manual; reviewer precisa rastrear todos os `Catch.Next` para garantir LIFO.                                                       |
 
@@ -345,7 +345,7 @@ Filament admin panel sobre `saga_view`:
 
 - **Lista paginada** com filtros: status, saga_type, range de datas, busca por `saga_id`.
 - **Drill-down** por saga: mostra timeline visual dos events no `events_json` com payloads expandíveis.
-- **Ações:** retry manual (republica `saga.started` com mesmo `saga_id` + payload original), abort (publica `saga.aborted`).
+- **Ações:** retry manual (republica `saga.started.<flow>` com mesmo `saga_id` + payload original via `EventBus::publish()` — não `startSaga()`, que geraria UUID novo), abort (publica `saga.aborted`).
 - **Métricas agregadas:** % completas/compensadas/falhas última hora, p50/p95/p99 de duração por `saga_type`.
 
 ### §7.5 Custos estimados

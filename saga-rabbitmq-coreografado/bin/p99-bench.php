@@ -5,12 +5,11 @@ declare(strict_types=1);
 require __DIR__ . '/../vendor/autoload.php';
 
 use Mobilestock\SagaCoreografada\EventBus;
-use Ramsey\Uuid\Uuid;
 
 // Bench de latência sequencial — dispara N sagas uma a uma, espera cada saga
 // chegar a confirm_shipping (último step de service-a) antes de disparar a próxima.
 // Modelo coreografado não tem tabela central de sagas, então pollamos o step_log
-// de service-a que recebe confirm_shipping = saga.completed.
+// de service-a que recebe confirm_shipping = saga.completed.create_order.
 
 $count = (int) ($argv[1] ?? 1000);
 
@@ -28,9 +27,8 @@ $stmt = $pdo->prepare("SELECT 1 FROM step_log WHERE saga_id = ? AND step = 'conf
 
 $latencies = [];
 for ($i = 0; $i < $count; $i++) {
-    $sagaId = Uuid::uuid4()->toString();
     $start = microtime(true);
-    $bus->publish('saga.started', $sagaId, [
+    $sagaId = $bus->startSaga('create_order', [
         'product_id' => 'p_' . random_int(100, 999),
         'quantity' => 2,
         'user_id' => 'u_' . random_int(100, 999),

@@ -33,7 +33,7 @@ final class SagaListener
     ) {}
 
     /**
-     * @param string $event evento de entrada (ex: 'saga.started', 'stock.reserved')
+     * @param string $event evento de entrada (ex: 'saga.started.create_order', 'stock.reserved')
      * @param string $stepName nome canônico do step (chave no step_log e compensation_log)
      * @param string $emit evento publicado em sucesso (ex: 'stock.reserved')
      * @param callable(string $sagaId, array $payload): array $handler retorna payload do evento de sucesso

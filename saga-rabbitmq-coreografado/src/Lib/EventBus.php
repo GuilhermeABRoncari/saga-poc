@@ -10,10 +10,18 @@ use PhpAmqpLib\Exception\AMQPRuntimeException;
 use PhpAmqpLib\Exception\AMQPIOException;
 use PhpAmqpLib\Exception\AMQPConnectionClosedException;
 use PhpAmqpLib\Message\AMQPMessage;
+use Ramsey\Uuid\Uuid;
 
 /**
  * Event bus minimalista sobre RabbitMQ topic exchange, com reconnect
  * automático em caso de queda do broker.
+ *
+ * "Bus" no sentido de barramento: ponto compartilhado por onde eventos
+ * trafegam. A aplicação publica eventos sem saber quem consome;
+ * consumidores se inscrevem por routing key sem saber quem produziu.
+ * Esse desacoplamento é o que viabiliza coreografia — não há ligação
+ * direta entre serviços, só strings combinadas (routing keys) trafegando
+ * pelo broker.
  *
  * Coreografia pura: cada serviço publica eventos de domínio e
  * subscribe nos eventos que ele precisa reagir. Não há broker central
@@ -40,6 +48,23 @@ final class EventBus
         $this->conn = new AMQPStreamConnection($this->host, $this->port, $this->user, $this->pass);
         $this->channel = $this->conn->channel();
         $this->channel->exchange_declare(self::EXCHANGE, 'topic', false, true, false);
+    }
+
+    /**
+     * Dispara um novo fluxo de saga: gera o sagaId (UUID), publica
+     * 'saga.started.<flow>' com a convenção esperada pelos consumidores,
+     * e devolve o sagaId pro chamador (útil pra logar/rastrear).
+     *
+     * Use APENAS no ponto de origem da saga. Para propagar steps no meio
+     * do fluxo, use publish() passando o sagaId do evento de entrada —
+     * o sagaId precisa ser preservado entre eventos pra que a correlação
+     * via step_log/compensation_log funcione.
+     */
+    public function startSaga(string $flow, array $payload): string
+    {
+        $sagaId = Uuid::uuid4()->toString();
+        $this->publish('saga.started.' . $flow, $sagaId, $payload);
+        return $sagaId;
     }
 
     public function publish(string $eventType, string $sagaId, array $payload): void
