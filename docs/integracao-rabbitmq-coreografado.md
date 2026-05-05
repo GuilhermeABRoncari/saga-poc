@@ -43,11 +43,24 @@ Decisões de plataforma que precisam estar resolvidas antes de qualquer commit:
    **Contrato lib ⇄ aplicação:** a lib não conhece os handlers da aplicação. Ela expõe `SagaDefinition` como classe abstrata; cada saga organizacional vira uma classe da aplicação que estende `SagaDefinition` e declara seus `react()`/`compensate()` num único método `register(SagaListener $listener)`. A aplicação registra essas classes via tag no container (`saga.definitions`); o `RunWorkerCommand` da lib resolve o `SagaRegistry`, itera as definições e delega a montagem do chain a cada uma.
 
 3. **Convenção de nomes de evento** combinada com o time:
+
    - Domínio: `<bounded-context>.<event>` (ex.: `stock.reserved`, `credit.charged`, `email.verified`).
    - Início de fluxo: `saga.started.<flow>` — o sufixo `<flow>` (ex.: `create_order`, `refund_order`, `activate_store`) é o que **multiplexa fluxos distintos** sobre a mesma lib e o mesmo broker. Cada `<flow>` corresponde a uma cadeia de `react()` independente.
    - Falha: `saga.failed` (fanout para todos os consumers que assinam).
    - Sucesso terminal: `saga.completed.<flow>` (informativo; consumido apenas por aggregator/observabilidade).
    - **Isolamento por instância:** `saga_id` (UUID gerado por requisição) é a única dimensão que separa execuções concorrentes — vale tanto entre sagas do mesmo `<flow>` quanto entre `<flow>`s diferentes. As tabelas `saga_step_log` e `saga_compensation_log` têm PK `(saga_id, step)`, então N sagas coexistem naturalmente.
+
+4. **Endereçar dívida técnica da PoC antes de declarar a lib v1.0.** A PoC em [`saga-rabbitmq-coreografado/`](../saga-rabbitmq-coreografado/) prioriza clareza pedagógica e mínimo viável; cinco simplificações conscientes precisam ser revisadas no caminho pra produção:
+
+   | #   | Simplificação na PoC                                           | Risco em produção                                                                                                                                                                                              | Encaminhamento na v1                                                                                                                                                                                                                                           |
+   | --- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | 1   | `basic_publish` é fire-and-forget — sem **publisher confirms** | Mensagens podem ser perdidas se o broker cair entre `publish` e o flush real (ex.: ack TCP recebido mas mensagem ainda em buffer do broker).                                                                   | Habilitar `confirm_select` no channel; expor `publish()` síncrono que aguarda confirm (com timeout configurável) e `publishAsync()` pra casos onde latência importa mais que garantia. Métrica de `publisher_nack` pra alertar se broker rejeita.              |
+   | 2   | Retry de handler via `ack + sleep(2) + republish`              | Bloqueia o channel durante o sleep (não processa outras mensagens); perde ordem (mensagem republicada vai pro fim da fila); CPU spike se muitas falhas concorrentes.                                           | Configurar **dead-letter exchange (DLX) com TTL** — `nack` da mensagem original com `requeue=false` faz broker mandar pra DLX, que re-injeta na queue após o TTL. Não bloqueia channel, escalável. Configuração via policy do RabbitMQ ou argumentos da queue. |
+   | 3   | Worker usa **1 channel só**                                    | Não há paralelismo intra-processo: handler lento bloqueia toda a queue do worker; throughput cap = 1/handler-latency.                                                                                          | Pool de N channels (cada um com seu `basic_consume`) sobre a mesma connection. Tunable via config `saga.worker.parallelism`. Cuidado: handlers precisam ser thread-safe (sem state global mutável).                                                            |
+   | 4   | Heartbeat AMQP no default (60s)                                | Se o broker considera a conexão morta antes do worker perceber, a próxima operação dá `AMQPConnectionClosedException` — `subscribe()` recupera, mas pode haver janela de mensagens em voo perdidas/duplicadas. | Configurar heartbeat explícito (recomendado: 10-30s) via `AMQPStreamConnection` constructor. Documentar interação com `consumer_timeout` do broker (default 30min em RabbitMQ 3.12+).                                                                          |
+   | 5   | Sem rate limit / circuit breaker no publish                    | Se o broker estiver em overload e o worker tentar republicar (caminho de erro do handler), agrava o problema — feedback loop.                                                                                  | Circuit breaker simples no `publish()`: após N falhas seguidas em janela de tempo, abrir circuito e falhar fast por X segundos. Métrica de circuit state pra observabilidade.                                                                                  |
+
+   Esses cinco pontos não são bug — são **decisões de simplificação documentadas** da PoC, registradas aqui pra que a v1 da lib não os herde por inércia. Antes de marcar `acme/laravel-saga@1.0.0` como release estável, cada um deve ter código + teste correspondente.
 
 ---
 
@@ -580,6 +593,7 @@ Para cada fluxo síncrono que vira saga:
 ## Checklist de adoção
 
 - [ ] Lib `acme/laravel-saga` v1.0 publicada (modo coreografado apenas, conforme decisão registrada em `recomendacao-saga.md` §5.1).
+- [ ] **Dívida técnica da PoC endereçada na v1** (ver Fase 0 §4): publisher confirms, retry via DLX+TTL, pool de channels, heartbeat customizado, circuit breaker no publish.
 - [ ] RabbitMQ 4.3+ provisionado em dev/staging/prod.
 - [ ] Convenção de nomes de evento documentada e revisada com squads.
 - [ ] Migrations `saga_step_log` e `saga_compensation_log` aplicadas no banco de cada serviço participante.
