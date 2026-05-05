@@ -77,9 +77,9 @@ Validação: `docker compose up rabbitmq` + abrir http://localhost:15672 (login 
 
 ## Fase 2 — Service do worker no compose (1 dia)
 
-A imagem atual do `order-service` herda de `php-fpm-base` (definida em `docker-compose.base.yml` do `mobilestock/backend`), que **já inclui as extensões `sockets` e `bcmath`** — pré-requisitos do `php-amqplib`. Não é preciso construir uma imagem nova nem adotar Dockerfile multi-stage: o worker é só **mais um service no compose** apontando pra mesma imagem base, com `command:` próprio.
+Pré-requisito: a imagem PHP do serviço precisa ter as extensões `sockets` e `bcmath` (requeridas pelo `php-amqplib`). A maioria dos stacks Laravel já tem ambas via base image compartilhada — quando esse for o caso, **não é preciso construir uma imagem nova nem adotar Dockerfile multi-stage**. O worker é só **mais um service no compose** apontando pra mesma imagem do app, com `command:` próprio.
 
-Esse é o padrão já em uso no monorepo para outros processos long-running do `lookpay-api-beta` (`lookpay-api-beta-queue-worker`, `lookpay-api-beta-process-pix-payments`, `lookpay-api-beta-process-pending-transfers`, etc.) — uma imagem por app, N services com `command:` distintos, cada um com sua `restart:` policy.
+Esse padrão — uma imagem por app, N services com `command:` distintos e `restart:` policy independente — é o mesmo já aplicado a outros processos long-running de aplicações Laravel (workers de fila, jobs agendados em loop, listeners de eventos, etc.).
 
 `docker-compose.development.yml` (ou equivalente do app):
 
@@ -87,23 +87,19 @@ Esse é o padrão já em uso no monorepo para outros processos long-running do `
 order-service-saga-worker:
   build:
     dockerfile_inline: |
-      FROM ${COMPOSE_PROJECT_NAME}-php-fpm-base-development:latest
+      FROM <imagem-base-php-do-app>:latest
   command: php artisan saga:listen
   working_dir: /order-service
   volumes:
-    - ./apps/order-service:/order-service
-    - ./apps/order-service/config/php.ini-development:/usr/local/etc/php/php.ini
+    - ./order-service:/order-service
   environment:
     <<: *order_service_envs
-  extra_hosts:
-    - 'host.docker.internal:host-gateway'
   restart: always
   depends_on:
-    - php-fpm-base-development
     - rabbitmq
 ```
 
-O service HTTP existente (`order-service`, php-fpm + nginx) permanece como está — mesma imagem, `command:` padrão. O worker compartilha código, configs, conexão de banco e `.env` por volume; só diverge no entrypoint.
+O service HTTP existente (`order-service`, php-fpm) permanece como está — mesma imagem, `command:` padrão. O worker compartilha código, configs, conexão de banco e `.env` por volume; só diverge no entrypoint.
 
 **Quando migrarem pra K8s/EKS**: o mesmo padrão se traduz em dois `Deployment`s apontando pra mesma `image:`, com `args:` diferentes (`["php", "artisan", "serve"]` vs `["php", "artisan", "saga:listen"]`). Não é preciso quebrar em duas tags no registry — escala, rollout, livenessProbe e HPA continuam independentes porque são objetos K8s distintos, não imagens distintas.
 
@@ -480,7 +476,7 @@ Tagueada no `SagaServiceProvider` do `payment-service` exatamente como no `order
 
 > **Acoplamento por convenção, não por tipo:** os nomes de evento (`stock.reserved`, `credit.charged`) são contratos implícitos entre serviços. Para reduzir risco de quebra silenciosa, recomenda-se adicionalmente um pacote `acme/saga-contracts` com **PHP DTOs versionados** compartilhados via Composer (mesma lógica do orquestrado, ver `integracao-rabbitmq.md` Fase 7).
 
-> **Cada serviço, sua queue, suas N sagas:** a convenção `<service>.saga` (ex.: `order-service.saga`, `payment-service.saga`, `<outro>.saga`) garante que cada app tenha sua queue durável independente — falha de um worker não afeta o backlog dos outros. Dentro de cada queue, o serviço participa de **quantos `<flow>`s precisar** sem nova infra: basta adicionar mais uma `SagaDefinition` ao tag `saga.definitions` (Fase 4.5). Em monorepo PHP/Laravel com múltiplos apps, isso significa que cada app tem 1 worker daemon, mas pode ser citado em N sagas organizacionais — não há limite estrutural.
+> **Cada serviço, sua queue, suas N sagas:** a convenção `<service>.saga` (ex.: `order-service.saga`, `payment-service.saga`, `<outro>.saga`) garante que cada app tenha sua queue durável independente — falha de um worker não afeta o backlog dos outros. Dentro de cada queue, o serviço participa de **quantos `<flow>`s precisar** sem nova infra: basta adicionar mais uma `SagaDefinition` ao tag `saga.definitions` (Fase 4.5). Cada app tem 1 worker daemon, mas pode ser citado em N sagas organizacionais — não há limite estrutural.
 
 ---
 
