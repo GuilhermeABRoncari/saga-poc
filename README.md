@@ -4,9 +4,11 @@ Estudo comparativo público do padrão **SAGA** em arquiteturas distribuídas ba
 
 ## Resumo executivo
 
-A pergunta não é "qual ferramenta resolve um caso pontual?", mas **qual modelo + qual ferramenta servem como padrão sustentável** para múltiplos serviços que coordenam transações distribuídas. Para responder, congelamos critérios antes de implementar, executamos 20 testes Tier 1-6 contra cada PoC, e medimos número (não opinião): LOC, latência p50/p99, throughput, RAM idle, escritas no banco por saga, custo Cloud projetado em 12 meses.
+A pergunta não é "qual ferramenta resolve um caso pontual?", mas **qual modelo + qual ferramenta servem como padrão sustentável** para múltiplos serviços que coordenam transações distribuídas. Para responder, congelamos critérios antes de implementar, executamos 20 testes Tier 1-6 contra cada PoC, e medimos número (não opinião): LOC, latência p50/p99, throughput, RAM idle, escritas no banco por saga, custo recorrente de infra/SaaS projetado em 12 meses.
 
-A conclusão consolidada é uma **árvore de decisão**, não uma escolha única (detalhe em `docs/recomendacao-saga.md` §9.1):
+> **Tempo de desenvolvimento não é parâmetro de decisão neste estudo.** Estimativas de "X dias eng" foram removidas dos docs porque dependem fortemente de contexto (familiaridade do time, escopo aceito, prioridades concorrentes) e tendem a empurrar a comparação para o lado de quem mediu primeiro. Os critérios que substituem essa métrica indireta são qualitativos: **componentes próprios a manter** e **conceitos novos a aprender**, em `docs/recomendacao-saga.md` §2.1.
+
+A conclusão consolidada é uma **árvore de decisão**, não uma escolha única (detalhe em `docs/recomendacao-saga.md` §4):
 
 | Ferramenta × Modelo             | Latência p99 | Throughput | Vence quando…                                                                                             |
 | ------------------------------- | ------------ | ---------- | --------------------------------------------------------------------------------------------------------- |
@@ -21,7 +23,7 @@ Achados estruturais que não mudam conforme o cenário:
 
 - **Temporal × banco:** MariaDB **não suportado** (Multi-Valued Indexes, JSON path); MySQL 8 confirmado funcional empiricamente. Backends oficiais: PostgreSQL 12+, MySQL 8.0+, Cassandra 3.11+.
 - **RabbitMQ 4.3 (Khepri/Raft):** mirrored queues removidas; quorum queues são única opção HA suportada e custam **−25% de throughput** em single-node.
-- **Custo 12 meses:** RabbitMQ self-hosted ~$2.4-4.8k; Temporal Cloud em escala (~17M sagas/mês × 7 actions) ~$58k/ano.
+- **Custo recorrente 12 meses (infra/SaaS apenas):** RabbitMQ self-hosted ~$2.4-4.8k; Temporal Cloud em escala (~17M sagas/mês × 7 actions) ~$58k/ano.
 - **Escritas no banco por saga:** Temporal 38 INSERTs (happy) / 53 (com compensação); RabbitMQ orquestrado 1; coreografado 0 / 2.
 
 ## Estrutura do repositório
@@ -48,7 +50,7 @@ Com `FORCE_FAIL=step3` o passo 3 falha → roda `RefundCredit` → `ReleaseStock
 Documentos de **decisão**:
 
 - [`docs/recomendacao-saga.md`](./docs/recomendacao-saga.md) — recomendação consolidada como árvore de decisão por cenário (fluxo, time, infraestrutura, requisitos não-funcionais), tabela comparativa final das 4 combinações, scorecard, anti-padrões.
-- [`docs/consideracoes.md`](./docs/consideracoes.md) — prós e contras detalhados por ferramenta, incluindo §8.0 (Saga Aggregator) e §8.1 (TCO em 3 cenários de volume).
+- [`docs/consideracoes.md`](./docs/consideracoes.md) — prós e contras detalhados por ferramenta, incluindo §7 (Saga Aggregator) e §8 (TCO recorrente de infra/SaaS em 3 cenários de volume).
 
 Documentos de **medição**:
 
