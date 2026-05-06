@@ -134,12 +134,13 @@ A matriz fica registrada como **3 ferramentas × 2 modelos = 4 combinações tes
 
 ## 6. Como a recomendação evoluiu
 
-| Momento                   | Forma da recomendação                                                                                                                                                                                              |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Pré-PoC (narrativa)       | "Temporal por durable execution + audit trail." Baseado em marketing, sem evidência.                                                                                                                               |
-| Fim da iteração 1         | "Temporal para SAGA orquestrada." Baseado em 20 testes; viés do ramo único reconhecido como ressalva.                                                                                                              |
-| Pré-review                | **Reaberta.** "Falta a 4ª PoC; comparar como árvore de decisão, não escolha única."                                                                                                                                |
-| Fim da iteração 2 (atual) | Árvore de decisão por cenário: fluxo curto + multi-squad → coreografia; fluxo longo + audit → Temporal; AWS-native + free tier → Step Functions; orquestração média → RabbitMQ orquestrado com mitigações de T5.1. |
+| Momento                 | Forma da recomendação                                                                                                                                                                                                                                                                           |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pré-PoC (narrativa)     | "Temporal por durable execution + audit trail." Baseado em marketing, sem evidência.                                                                                                                                                                                                            |
+| Fim da iteração 1       | "Temporal para SAGA orquestrada." Baseado em 20 testes; viés do ramo único reconhecido como ressalva.                                                                                                                                                                                           |
+| Pré-review              | **Reaberta.** "Falta a 4ª PoC; comparar como árvore de decisão, não escolha única."                                                                                                                                                                                                             |
+| Fim da iteração 2       | Árvore de decisão por cenário: fluxo curto + multi-squad → coreografia; fluxo longo + audit → Temporal; AWS-native + free tier → Step Functions; orquestração média → RabbitMQ orquestrado com mitigações de T5.1.                                                                              |
+| Fechamento (2026-05-06) | **Padrão organizacional adotado: RabbitMQ coreografado.** Árvore técnica preservada; filtro de custo aplicado por cima — RabbitMQ já na stack + lib <400 LOC + sem tabela central + sem infra nova é o piso de custo. Demais critérios qualitativos descartados como decisores conscientemente. |
 
 A trajetória é o que esperávamos de um estudo honesto: começou em narrativa, virou evidência, foi corrigida ao perceber viés, e fechou em recomendação contextual.
 
@@ -154,7 +155,40 @@ A trajetória é o que esperávamos de um estudo honesto: começou em narrativa,
 
 ---
 
-## 8. Arquivos relacionados
+## 9. Decisão final — 2026-05-06
+
+Após a iteração 2 e a maturação da 4ª PoC, a decisão organizacional foi fechada: **adotar SAGA coreografada com RabbitMQ** como padrão para os 4 sistemas (e-commerce, logística, financeiro, estoque).
+
+### 9.1 Critério decisivo
+
+**Custo.** O eixo financeiro de §4.5 passo 6 da recomendação foi promovido a decisor primário. RabbitMQ coreografado é o piso de custo possível para SAGA via filas porque acumula três zeros simultâneos:
+
+1. **Zero infra nova:** RabbitMQ já está na stack em uso. Nenhum novo serviço a provisionar/operar.
+2. **Zero SGBD dedicado:** o modelo coreografado dispensa tabela central de saga. Cada serviço usa o banco que já tem; quando o handler é stateless, dispensa banco também.
+3. **Zero licenciamento/cluster próprio:** nem Temporal Cloud (~$58k/ano em escala) nem Temporal self-hosted (cluster + 2º SGBD MySQL 8 + Elasticsearch opcional) nem Step Functions (lock-in profundo + free tier insuficiente em escala).
+
+Comparado a Temporal, a economia recorrente é da ordem de milhares de USD/ano + a ausência de uma nova superfície operacional para o time SRE manter.
+
+### 9.2 O que foi conscientemente descartado como decisor
+
+Os critérios em que Temporal vencia — observabilidade nativa, audit trail unificado, replay determinístico, conceito nativo de timeout, prevenção estrutural de silent corruption (T5.1) — são reconhecidos como reais e relevantes, mas **não foram suficientes** para justificar o custo adicional dada a previsão de fluxos curtos (≤ 3 steps) e múltiplos squads independentes. Documentar esse descarte explicitamente importa: se algum desses critérios virar requisito duro no futuro (compliance, postmortems frequentes, fluxos crescendo para 8+ steps), a decisão precisa ser revisitada — não esquecida.
+
+### 9.3 Implicações imediatas
+
+- A v1 da lib interna segue a especificação de §5.1 da recomendação — coreografada, sem porta para orquestrado, YAGNI estrito.
+- A árvore de decisão por cenário (§4 da recomendação) **não é descartada** — vira referência para casos futuros que ofendam a premissa de custo.
+- As três PoCs orquestradas (`saga-rabbitmq/`, `saga-temporal/`, `saga-step-functions/`) ficam preservadas no repositório como evidência do processo, não como caminho a seguir.
+
+### 9.4 Quando reabrir a decisão organizacional
+
+- Volume agregado crescer além de 10M actions/mês a ponto de o Saga Aggregator + disciplina de idempotência custar mais que um engine dedicado.
+- Requisito de compliance/audit estrito surgir e exigir retention configurável + replay nativo.
+- Fluxos reais começarem a passar de 7-8 steps com aninhamento, conforme §4.1 da recomendação.
+- Custo operacional real do RabbitMQ + Saga Aggregator superar a estimativa que ancorou esta decisão.
+
+---
+
+## 10. Arquivos relacionados
 
 - [`recomendacao-saga.md`](./recomendacao-saga.md) — recomendação consolidada como árvore de decisão.
 - [`consideracoes.md`](./consideracoes.md) — prós/contras detalhados, §8.0 Saga Aggregator, §8.1 TCO em 3 cenários.

@@ -1,8 +1,14 @@
 # Recomendação de ferramenta para SAGA — estudo comparativo
 
-Documento consolidado de **decisão**. Sintetiza a evidência produzida por quatro PoCs (RabbitMQ orquestrado, RabbitMQ coreografado, Temporal, AWS Step Functions) submetidas aos mesmos 20 testes Tier 1-6, e propõe uma **árvore de decisão** orquestração ⇄ coreografia × ferramenta — não uma escolha única.
-
-Complementar a [`fechamento.md`](./fechamento.md) (narrativa de processo do estudo), [`consideracoes.md`](./consideracoes.md) (prós/contras detalhados, §8.0 Saga Aggregator, §8.1 TCO em 3 cenários) e [`checklist-testes.md`](./checklist-testes.md) (matriz Tier 1-6).
+> **Status — FECHADA em 2026-05-06: RabbitMQ coreografado**
+>
+> Decisão final: adotar **SAGA coreografada com RabbitMQ** como padrão organizacional para os 4 sistemas (e-commerce, logística, financeiro, estoque).
+>
+> **Critério decisivo: custo.** RabbitMQ já está na stack (zero infra nova), o modelo coreografado dispensa tabela central de saga (cada serviço usa o banco que já tem — ou nem usa banco quando o handler é stateless), e a lib mínima validada na PoC (357 LOC) não impõe servidor de workflow, state store dedicado nem licenciamento adicional. É o piso de custo possível para SAGA via filas.
+>
+> Os demais critérios (observabilidade, durable execution nativa, audit trail unificado, replay determinístico) pesavam a favor do Temporal e foram conscientemente descartados como decisores — o custo dominou. A árvore de decisão por cenário abaixo permanece como referência técnica para casos futuros que fujam da premissa de custo.
+>
+> Histórico do processo em [`fechamento.md`](./fechamento.md) §9.
 
 ---
 
@@ -37,27 +43,27 @@ Cada PoC implementou o **mesmo workflow** (3 passos: `ReserveStock` → `ChargeC
 
 ### 2.1 Tabela comparativa final
 
-| Eixo                                                   | RabbitMQ orquestrado                          | RabbitMQ coreografado           | Temporal                                       | Step Functions                          |
-| ------------------------------------------------------ | --------------------------------------------- | ------------------------------- | ---------------------------------------------- | --------------------------------------- |
-| **LOC da lib**                                         | 381                                           | 357                             | wrapper fino sobre o SDK oficial               | 119 (state-machine.json) + workers      |
-| **T6.2 latência sequencial p50**                       | 21.8 ms                                       | **10.2 ms**                     | 59.9 ms                                        | ~600 ms (LocalStack)                    |
-| **T6.2 latência sequencial p99**                       | 23.8 ms                                       | **20.4 ms**                     | 351.2 ms                                       | ~2092 ms (LocalStack)                   |
-| **Throughput sequencial**                              | ~46/s                                         | **~94/s**                       | ~7.4/s                                         | ~7.5/s (LocalStack)                     |
-| **T1.3 burst (100 sagas concorrentes)**                | 142/s (4.3 classic durable)                   | dependente do consumer          | 28/s                                           | 10.9/s                                  |
-| **RAM idle (stack)**                                   | ~108 MiB broker (4.3)                         | ~110 MiB broker                 | 439 MB (~4×)                                   | LocalStack ~600 MB                      |
-| **Imagens Docker**                                     | 665 MB                                        | 665 MB                          | 3800 MB                                        | LocalStack ~1 GB                        |
-| **INSERTs por saga (happy)**                           | 1                                             | **0**                           | 38                                             | depende da ASL                          |
-| **INSERTs por saga (com compensação)**                 | 1                                             | 2                               | 53                                             | depende da ASL                          |
-| **HA em produção**                                     | Quorum queues (−25% throughput)               | Quorum queues (−25% throughput) | Replicação nativa do engine                    | Multi-AZ AWS-managed                    |
-| **SGBD necessário**                                    | nenhum dedicado                               | nenhum dedicado                 | Postgres / **MySQL 8** / Cassandra (≠ MariaDB) | nenhum (managed)                        |
-| **Audit trail / replay**                               | Construir (Saga Aggregator)                   | Construir (Saga Aggregator)     | Nativo, retention configurável                 | Nativo (CloudWatch + Execution history) |
-| **T5.1 silent corruption sob reorder**                 | **Sim** — saga COMPLETED com state corrompido | N/A — sem definição central     | Panic LOUD `[TMPRL1100]`                       | Pinning vs migration silenciosa         |
-| **T1.4 worker survives broker outage**                 | Não (sem auto-reconnect)                      | **Sim** (reconnect na lib)      | Sim (gRPC retry nativo)                        | N/A                                     |
-| **T4.4 conceito de timeout**                           | Não tem                                       | Não tem                         | 4 tipos distintos                              | Definido na ASL                         |
-| **Lock-in**                                            | Nenhum (AMQP padrão)                          | Nenhum (AMQP padrão)            | Médio (engine + SDK)                           | Profundo (AWS-only)                     |
-| **Custo Cloud em escala (~17M sagas/mês × 7 actions)** | $2.4-4.8k/12 meses self-host                  | $2.4-4.8k/12 meses self-host    | **~$58k/ano** Cloud / ~$3-6k/ano self-host     | ~$51k/ano                               |
-| **Componentes próprios a manter**                      | lib + orchestrator + DLX + observabilidade    | lib + DLX + saga aggregator     | wrapper fino + determinismo lint               | ASL + Terraform + IAM/IRSA              |
-| **Conceitos novos a aprender**                         | AMQP, idempotência, outbox, retomada após boot | AMQP, idempotência, eventual consistency entre serviços | workflow determinístico, signals/queries, replay | ASL DSL, IAM/IRSA, ARN-based dedup |
+| Eixo                                                   | RabbitMQ orquestrado                           | RabbitMQ coreografado                                   | Temporal                                         | Step Functions                          |
+| ------------------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------ | --------------------------------------- |
+| **LOC da lib**                                         | 381                                            | 357                                                     | wrapper fino sobre o SDK oficial                 | 119 (state-machine.json) + workers      |
+| **T6.2 latência sequencial p50**                       | 21.8 ms                                        | **10.2 ms**                                             | 59.9 ms                                          | ~600 ms (LocalStack)                    |
+| **T6.2 latência sequencial p99**                       | 23.8 ms                                        | **20.4 ms**                                             | 351.2 ms                                         | ~2092 ms (LocalStack)                   |
+| **Throughput sequencial**                              | ~46/s                                          | **~94/s**                                               | ~7.4/s                                           | ~7.5/s (LocalStack)                     |
+| **T1.3 burst (100 sagas concorrentes)**                | 142/s (4.3 classic durable)                    | dependente do consumer                                  | 28/s                                             | 10.9/s                                  |
+| **RAM idle (stack)**                                   | ~108 MiB broker (4.3)                          | ~110 MiB broker                                         | 439 MB (~4×)                                     | LocalStack ~600 MB                      |
+| **Imagens Docker**                                     | 665 MB                                         | 665 MB                                                  | 3800 MB                                          | LocalStack ~1 GB                        |
+| **INSERTs por saga (happy)**                           | 1                                              | **0**                                                   | 38                                               | depende da ASL                          |
+| **INSERTs por saga (com compensação)**                 | 1                                              | 2                                                       | 53                                               | depende da ASL                          |
+| **HA em produção**                                     | Quorum queues (−25% throughput)                | Quorum queues (−25% throughput)                         | Replicação nativa do engine                      | Multi-AZ AWS-managed                    |
+| **SGBD necessário**                                    | nenhum dedicado                                | nenhum dedicado                                         | Postgres / **MySQL 8** / Cassandra (≠ MariaDB)   | nenhum (managed)                        |
+| **Audit trail / replay**                               | Construir (Saga Aggregator)                    | Construir (Saga Aggregator)                             | Nativo, retention configurável                   | Nativo (CloudWatch + Execution history) |
+| **T5.1 silent corruption sob reorder**                 | **Sim** — saga COMPLETED com state corrompido  | N/A — sem definição central                             | Panic LOUD `[TMPRL1100]`                         | Pinning vs migration silenciosa         |
+| **T1.4 worker survives broker outage**                 | Não (sem auto-reconnect)                       | **Sim** (reconnect na lib)                              | Sim (gRPC retry nativo)                          | N/A                                     |
+| **T4.4 conceito de timeout**                           | Não tem                                        | Não tem                                                 | 4 tipos distintos                                | Definido na ASL                         |
+| **Lock-in**                                            | Nenhum (AMQP padrão)                           | Nenhum (AMQP padrão)                                    | Médio (engine + SDK)                             | Profundo (AWS-only)                     |
+| **Custo Cloud em escala (~17M sagas/mês × 7 actions)** | $2.4-4.8k/12 meses self-host                   | $2.4-4.8k/12 meses self-host                            | **~$58k/ano** Cloud / ~$3-6k/ano self-host       | ~$51k/ano                               |
+| **Componentes próprios a manter**                      | lib + orchestrator + DLX + observabilidade     | lib + DLX + saga aggregator                             | wrapper fino + determinismo lint                 | ASL + Terraform + IAM/IRSA              |
+| **Conceitos novos a aprender**                         | AMQP, idempotência, outbox, retomada após boot | AMQP, idempotência, eventual consistency entre serviços | workflow determinístico, signals/queries, replay | ASL DSL, IAM/IRSA, ARN-based dedup      |
 
 > Notas:
 >
@@ -151,14 +157,14 @@ A escolha "RabbitMQ orquestrado vs RabbitMQ coreografado vs Temporal vs Step Fun
 
 ### 4.4 Por característica de infraestrutura
 
-| Característica                                                | Recomendação               | Justificativa                                                                                        |
-| ------------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Característica                                                | Recomendação               | Justificativa                                                                                                                         |
+| ------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | **Stack monolítica em MariaDB**                               | RabbitMQ (qualquer modelo) | Reusa banco existente; Temporal exige 2º SGBD (MySQL 8 ou Postgres — `findings-temporal.md` §2.2.6) com custo recorrente de provisão. |
-| **Stack já em MySQL 8 ou Postgres**                           | Empate Temporal / RabbitMQ | Sem custo de SGBD adicional; decisão por outros eixos.                                               |
-| **Multi-DC ativo-ativo obrigatório**                          | Temporal com Cassandra     | Único combo com primitivas multi-DC nativas.                                                         |
-| **Sem capacidade SRE para operar Postgres+ES self-hosted**    | **Temporal Cloud**         | Cloud absorve operação. Custo financeiro vira aceitável pelo zero-overhead operacional.              |
-| **Budget cloud apertado**                                     | RabbitMQ self-hosted       | ~$2.4-4.8k/12 meses vs ~$58k/ano de Temporal Cloud em escala.                                        |
-| **Step Functions free tier suficiente (≤ 4k transições/mês)** | **Step Functions**         | Custo zero até esse limite; cobrança previsível; lock-in AWS aceitável se já é stack AWS.            |
+| **Stack já em MySQL 8 ou Postgres**                           | Empate Temporal / RabbitMQ | Sem custo de SGBD adicional; decisão por outros eixos.                                                                                |
+| **Multi-DC ativo-ativo obrigatório**                          | Temporal com Cassandra     | Único combo com primitivas multi-DC nativas.                                                                                          |
+| **Sem capacidade SRE para operar Postgres+ES self-hosted**    | **Temporal Cloud**         | Cloud absorve operação. Custo financeiro vira aceitável pelo zero-overhead operacional.                                               |
+| **Budget cloud apertado**                                     | RabbitMQ self-hosted       | ~$2.4-4.8k/12 meses vs ~$58k/ano de Temporal Cloud em escala.                                                                         |
+| **Step Functions free tier suficiente (≤ 4k transições/mês)** | **Step Functions**         | Custo zero até esse limite; cobrança previsível; lock-in AWS aceitável se já é stack AWS.                                             |
 
 ### 4.5 Como navegar a árvore
 
@@ -194,16 +200,16 @@ Se a recomendação final apontar para RabbitMQ, a lib interna que precisa ser c
 
 2. **Design da v1 não fecha a porta para orquestrado em v2.** Significa código defensável hoje — não código especulativo:
 
-   | Princípio                                                    | O que entra na v1                                         | O que NÃO entra                                          |
-   | ------------------------------------------------------------ | --------------------------------------------------------- | -------------------------------------------------------- |
-   | Transport genérico (publish/consume/reconnect/dedup)         | sim                                                       | —                                                        |
-   | Convenção `saga_id` + `saga_name` em todo evento e job       | sim (necessário para idempotência da coreografia)         | —                                                        |
-   | `failed()` publica `saga.<id>.failed`; consumers compensam   | sim                                                       | —                                                        |
-   | `step_log` + `compensation_log` local por serviço            | sim (validado em PoC)                                     | —                                                        |
-   | Interface comum `SagaModelInterface` para os dois modelos    | —                                                         | **não** — não há segundo modelo para justificar          |
-   | Tabela `saga_definitions` ou `saga_states` central           | —                                                         | **não** — coreografia não usa, e v1 é só coreografia     |
-   | Orquestrador "minimal" sem usuário                           | —                                                         | **não** — código sem usuário é dívida, não preparação    |
-   | Hierarquia de classes pré-criada para o segundo modelo       | —                                                         | **não** — refator quando o segundo modelo entrar é menor |
+   | Princípio                                                  | O que entra na v1                                 | O que NÃO entra                                          |
+   | ---------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------- |
+   | Transport genérico (publish/consume/reconnect/dedup)       | sim                                               | —                                                        |
+   | Convenção `saga_id` + `saga_name` em todo evento e job     | sim (necessário para idempotência da coreografia) | —                                                        |
+   | `failed()` publica `saga.<id>.failed`; consumers compensam | sim                                               | —                                                        |
+   | `step_log` + `compensation_log` local por serviço          | sim (validado em PoC)                             | —                                                        |
+   | Interface comum `SagaModelInterface` para os dois modelos  | —                                                 | **não** — não há segundo modelo para justificar          |
+   | Tabela `saga_definitions` ou `saga_states` central         | —                                                 | **não** — coreografia não usa, e v1 é só coreografia     |
+   | Orquestrador "minimal" sem usuário                         | —                                                 | **não** — código sem usuário é dívida, não preparação    |
+   | Hierarquia de classes pré-criada para o segundo modelo     | —                                                 | **não** — refator quando o segundo modelo entrar é menor |
 
 3. **Gatilho explícito para reabrir o orquestrado.** Adicionar suporte a orquestração na lib só vira escopo se aparecer um caso real concreto: 3+ sagas com 5+ steps em fluxos cross-team com requisito de timeline visual centralizada. Sem gatilho, a porta aberta vira encruzilhada permanente — e a equipe acaba abstraindo no ar para o caso que nunca chega.
 
@@ -229,3 +235,17 @@ A árvore acima reflete o estado do estudo em 2026-05-04. Reavaliar quando:
 ## 7. Resumo de uma frase
 
 A recomendação final do estudo é uma **árvore de decisão**: para fluxos curtos e múltiplos squads, **RabbitMQ coreografado**; para fluxos longos ou audit trail estrito, **Temporal** (com MySQL 8); para casos AWS-native dentro do free tier, **Step Functions**; e **RabbitMQ orquestrado** como caminho médio quando coreografia não cabe e Temporal é overkill — sabendo de T5.1 e mitigando com lint + code review.
+
+---
+
+## 8. Decisão final (2026-05-06)
+
+**Padrão organizacional adotado: SAGA coreografada com RabbitMQ.**
+
+A árvore de decisão das §4 a §6 permanece tecnicamente válida — descreve qual combinação serve cada cenário. A decisão de fechamento aplicou um **filtro adicional de custo** sobre essa árvore: dado que os 4 sistemas alvo (e-commerce, logística, financeiro, estoque) cabem majoritariamente na linha "fluxo curto + multi-squad" (§4.1 e §4.3), e dado o eixo de governança "custo recorrente de infra/SaaS em 12 meses" como decisor final (§4.5 passo 6), a recomendação de RabbitMQ coreografado vence sem necessidade de empate técnico nos demais critérios.
+
+**O que isso significa concretamente:**
+
+- A lib interna a construir é a v1 coreografada descrita em §5.1 — exatamente como já especificado: transport genérico + naming convention de `saga_id`/`saga_name` + `failed()` publicando `saga.<id>.failed` + `step_log`/`compensation_log` por serviço. **Sem** tabela central, **sem** orquestrador, **sem** interface comum para um segundo modelo. YAGNI estrito.
+- Casos futuros que ofendam a premissa de custo (fluxo ≥ 8 steps, requisito de audit trail compliance, throughput 10k+ sagas/s sustentado, time AWS-native sem expertise em filas) **devem** ser tratados como exceção justificada, retornando à árvore das §4 a §6 e documentando o gatilho.
+- Reabrir a decisão organizacional só faz sentido se aparecer um caso real concreto que invalide a premissa de custo (ver §6 — gatilhos para reavaliação) ou se o custo total da operação RabbitMQ + Saga Aggregator + disciplina de idempotência se mostrar maior que o estimado em produção.
